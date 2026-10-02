@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: club-electricistas-pelsa
+    runtime: docker
+    plan: 0.5c-512mb
+    region: virginia
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: APP_URL
+        sync: false
+      - key: DATA_KEY
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: DATA_DIR
+        value: /app/data
+    disk:
+      name: club-data
+      mountPath: /app/data
+      sizeGB: 1
