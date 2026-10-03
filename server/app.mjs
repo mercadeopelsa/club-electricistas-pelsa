@@ -25,7 +25,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '64kb' }));
 const limited = (max, windowMs) => rateLimit({ windowMs, limit: max, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Demasiados intentos. Espera unos minutos antes de volver a intentar.' } });
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024, files: 2, fields: 12, fieldSize: 5000 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024, files: 1, fields: 12, fieldSize: 5000 } });
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const hashToken = token => createHash('sha256').update(token).digest('hex');
 const cookieName = secure ? '__Host-pelsa_session' : 'pelsa_session';
@@ -69,7 +69,7 @@ const registrationSchema = z.object({
 });
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/content', (_req, res) => res.json(visibleContent()));
-app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ name: 'front', maxCount: 1 }, { name: 'back', maxCount: 1 }]), wrap(async (req, res) => {
+app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ name: 'front', maxCount: 1 }]), wrap(async (req, res) => {
   const fields = registrationSchema.parse(req.body);
   const h = duiHash(fields.dui);
   const duplicateMessage = 'Ya existe una solicitud o membresía con este DUI. Comunícate con mercadeo de PELSA para revisarla.';
@@ -82,16 +82,13 @@ app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ nam
     referredBy = referrer.id;
   }
   const front = await cleanImage(req.files?.front?.[0]);
-  const back = await cleanImage(req.files?.back?.[0]);
   const frontFile = `${randomBytes(20).toString('hex')}.enc`;
-  const backFile = `${randomBytes(20).toString('hex')}.enc`;
   try {
     await writeFile(path.join(dataDir, 'documents', frontFile), encrypt(front), { mode: 0o600 });
-    await writeFile(path.join(dataDir, 'documents', backFile), encrypt(back), { mode: 0o600 });
-    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,referred_by,consent_at) VALUES (?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, backFile, referredBy, new Date().toISOString());
+    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,referred_by,consent_at) VALUES (?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, '', referredBy, new Date().toISOString());
     res.status(201).json({ message: 'Solicitud recibida. Mercadeo revisará tus datos y te notificará por WhatsApp.' });
   } catch (err) {
-    await Promise.allSettled([unlink(path.join(dataDir, 'documents', frontFile)), unlink(path.join(dataDir, 'documents', backFile))]);
+    await Promise.allSettled([unlink(path.join(dataDir, 'documents', frontFile))]);
     if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: duplicateMessage });
     throw err;
   }
@@ -153,10 +150,10 @@ app.patch('/api/admin/members/:id', (req, res) => {
   audit(req.admin.email, 'member.updated', req.params.id); res.json({ ok: true });
 });
 app.get('/api/admin/members/:id/documents/:side', wrap(async (req, res) => {
-  if (!['front', 'back'].includes(req.params.side)) return res.sendStatus(404);
-  const m = db.prepare('SELECT front_file,back_file FROM members WHERE id=?').get(req.params.id);
+  if (req.params.side !== 'front') return res.sendStatus(404);
+  const m = db.prepare('SELECT front_file FROM members WHERE id=?').get(req.params.id);
   if (!m) return res.sendStatus(404);
-  const file = req.params.side === 'front' ? m.front_file : m.back_file;
+  const file = m.front_file;
   const body = decrypt(await readFile(path.join(dataDir, 'documents', file)));
   audit(req.admin.email, req.query.download === '1' ? 'document.downloaded' : 'document.viewed', `${req.params.id}:${req.params.side}`);
   if (req.query.download === '1') res.attachment(`solicitud-${req.params.id}-${req.params.side}.jpg`);
@@ -211,7 +208,7 @@ app.get('/api/admin/audit', (_req, res) => res.json(db.prepare('SELECT * FROM au
 app.use('/api', (_req, res) => res.status(404).json({ error: 'No encontramos esa información.' }));
 app.use((err, _req, res, _next) => {
   if (err instanceof z.ZodError) return res.status(400).json({ error: 'Revisa los datos del formulario.', details: err.issues.map(i => `${i.path.join('.')}: ${i.message}`) });
-  if (err instanceof multer.MulterError) return res.status(400).json({ error: 'Revisa los archivos. El máximo es 6 MB por imagen y una imagen por campo.' });
+  if (err instanceof multer.MulterError) return res.status(400).json({ error: 'Revisa la fotografía. El máximo es 6 MB y solo debes adjuntar el frente del DUI.' });
   if (err.message?.startsWith('UPLOAD:')) return res.status(400).json({ error: err.message.slice(7) });
   // Do not log request bodies, filenames, DUI numbers or document contents.
   console.error('Request failed:', err.code || err.name);

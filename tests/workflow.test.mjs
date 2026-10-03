@@ -16,7 +16,7 @@ const image = await sharp({ create: { width: 80, height: 50, channels: 3, backgr
 function form(dui = '12345678-9', extra = {}) {
   const f = new FormData();
   for (const [k,v] of Object.entries({name:'Persona de prueba',email:'prueba@example.test',whatsapp:'50370000000',dui,consent:'true',...extra})) f.set(k,v);
-  f.set('front',new Blob([image],{type:'image/png'}),'front.png'); f.set('back',new Blob([image],{type:'image/png'}),'back.png'); return f;
+  f.set('front',new Blob([image],{type:'image/png'}),'front.png'); return f;
 }
 async function request(url, { method='GET', body, authenticated=false, origin='http://localhost:4173' }={}) {
   const headers = { Origin:origin }; if (authenticated) headers.Cookie=cookie;
@@ -38,12 +38,14 @@ test('registration, approval, privacy, referrals and suspension are durable and 
   assert.equal((await request('/api/registrations',{method:'POST',body:form()})).status,201);
   assert.equal((await request('/api/registrations',{method:'POST',body:form('123456789')})).status,409);
   let row=db.prepare('SELECT * FROM members LIMIT 1').get(); assert.equal(row.status,'pending'); assert.equal(row.number,null); assert.equal(row.token,null);
+  assert.equal(row.back_file,'');
   assert.ok(!Buffer.from(row.dui_encrypted).includes(Buffer.from('123456789'))); assert.equal(decrypt(row.dui_encrypted).toString(),'123456789');
   const document=await readFile(path.join(testDir,'documents',row.front_file)); assert.notEqual(document[0],0xff); assert.ok(decrypt(document).length>0);
   const approved=await request(`/api/admin/members/${row.id}/review`,{method:'POST',authenticated:true,body:{status:'approved'}}); assert.equal(approved.status,200);
   const member=await approved.json(); assert.equal(member.number,'000001'); assert.equal(member.token.length,48);
   const profile=await(await request(`/api/members/${member.token}`)).json(); assert.equal(profile.email,null); assert.equal(profile.whatsapp,null); assert.equal(profile.dui,undefined); assert.equal(profile.front_file,undefined); assert.equal(profile.status,undefined);
   assert.equal((await request(`/api/admin/members/${row.id}/documents/front`,{authenticated:true})).headers.get('content-type'),'image/jpeg');
+  assert.equal((await request(`/api/admin/members/${row.id}/documents/back`,{authenticated:true})).status,404);
   assert.equal((await request(`/api/admin/members/${row.id}/qr`,{authenticated:true})).headers.get('content-type'),'image/png');
   assert.equal((await request(`/api/admin/members/${row.id}/qr?type=referral`,{authenticated:true})).status,200);
   await request(`/api/admin/members/${row.id}`,{method:'PATCH',authenticated:true,body:{name:member.name,email:member.email,whatsapp:member.whatsapp,show_email:true,show_whatsapp:false}});
@@ -64,6 +66,9 @@ test('invalid documents and referrals are rejected without orphan files',async()
   assert.equal((await request('/api/registrations',{method:'POST',body:form('11111111-1',{referral:'999999'})})).status,400);
   assert.equal((await readdir(path.join(testDir,'documents'))).length,before);
   assert.equal((await request('/api/registrations',{method:'POST',body:form('invalid')})).status,400);
+  assert.equal((await request('/api/registrations',{method:'POST',body:form('22222222-2',{whatsapp:'5037000A000'})})).status,400);
+  const missingFront=form('33333333-3'); missingFront.delete('front');
+  assert.equal((await request('/api/registrations',{method:'POST',body:missingFront})).status,400);
 });
 
 test('scheduled promotions and hidden benefits are excluded from public responses',async()=>{

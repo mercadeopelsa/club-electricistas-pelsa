@@ -20,7 +20,7 @@ Ejecutadas con `pnpm run test`: 4 pruebas aprobadas, 0 fallidas.
 
 ## Pruebas en navegador
 
-- Formulario en escritorio y móvil, incluyendo carga de ambas imágenes con archivos artificiales.
+- Formulario en escritorio y móvil, incluyendo la carga de la fotografía frontal con un archivo artificial.
 - Confirmación visual de solicitud recibida.
 - Inicio de sesión del administrador local.
 - Revisión y aprobación de una solicitud ficticia.
@@ -48,7 +48,7 @@ Ejecutadas con `pnpm run test`: 4 pruebas aprobadas, 0 fallidas.
 - Configuración del subdominio, HTTPS y proxy inverso.
 - Copia automática y prueba de restauración del volumen persistente.
 - Monitoreo del servicio, espacio en disco y alertas.
-- Política institucional de privacidad, retención y eliminación de fotografías del DUI.
+- Política institucional de privacidad, retención y eliminación de la fotografía frontal del DUI.
 - Sustitución de la marca tipográfica por el archivo oficial del logotipo cuando esté disponible.
 
 ## Alcance que continúa pendiente

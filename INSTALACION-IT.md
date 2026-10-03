@@ -98,7 +98,7 @@ Para restaurar, use primero una instancia aislada, detenga el servicio, restaure
 
 ## Operación de mercadeo
 
-1. El solicitante registra nombre, WhatsApp salvadoreño, correo, DUI y ambas fotografías; se exige consentimiento.
+1. El solicitante registra nombre, WhatsApp salvadoreño, correo, DUI y una fotografía del frente del DUI; se exige consentimiento.
 2. Mercadeo ingresa a Miembros, abre la solicitud y coteja datos y documentos. La validación de formato no consulta el registro oficial de identidad ni realiza OCR.
 3. Al aprobar se asignan número y token; el QR usa el enlace del perfil. Imprima QR únicamente después de configurar el dominio definitivo. Cambiar de servidor conservando dominio, base y clave conserva tarjetas. Cambiar de dominio exige mantener redirecciones del anterior o volver a imprimir.
 4. El administrador puede activar correo y/o WhatsApp públicos. Nombre y número siempre están visibles en perfiles aprobados. Quien recibe el QR puede compartirlo.
