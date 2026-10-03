@@ -1,4 +1,4 @@
-# Verificación del MVP — 2 de octubre de 2026
+# Verificación del MVP — 3 de octubre de 2026
 
 ## Resultado
 
@@ -8,13 +8,16 @@ La aplicación compila y los flujos principales funcionan con datos ficticios. N
 
 Ejecutadas con `pnpm run test`: 4 pruebas aprobadas, 0 fallidas.
 
-- Registro pendiente con dos imágenes, normalización y rechazo de DUI duplicado.
+- Registro pendiente con la fotografía frontal, normalización y rechazo de DUI duplicado.
 - Rechazo de archivos inválidos y códigos de recomendación inexistentes sin dejar archivos huérfanos.
 - Aprobación con número correlativo, token aleatorio y perfil público limitado.
 - Correo y WhatsApp ocultos inicialmente y visibles solo cuando el administrador los habilita.
 - Descarga de documentos y QR únicamente con sesión administrativa.
 - Suspensión y reactivación sin cambiar el número ni el enlace del miembro.
 - Promociones publicadas únicamente cuando están activas y dentro de sus fechas.
+- Seguimiento del total de visitas a perfiles y de interacciones por promoción.
+- Apertura de WhatsApp al número de PELSA y conservación del KPI al eliminar una promoción.
+- Eliminación de la imagen almacenada cuando se elimina una promoción.
 - Beneficios ocultos excluidos de las vistas públicas.
 - Cierre de sesión invalidado en el servidor.
 

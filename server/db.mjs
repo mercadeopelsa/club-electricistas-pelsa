@@ -13,6 +13,12 @@ const key = Buffer.from(keyText, 'hex');
 export const db = new DatabaseSync(path.join(dataDir, 'club.sqlite'));
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
 db.exec(readFileSync(new URL('./migrations/001-initial.sql', import.meta.url), 'utf8'));
+function ensureColumn(table, column, definition) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+ensureColumn('members', 'profile_views', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('promotions', 'clicks', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('promotions', 'deleted_at', 'TEXT');
 export function encrypt(data) {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);

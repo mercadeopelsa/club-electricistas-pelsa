@@ -18,10 +18,10 @@ function form(dui = '12345678-9', extra = {}) {
   for (const [k,v] of Object.entries({name:'Persona de prueba',email:'prueba@example.test',whatsapp:'50370000000',dui,consent:'true',...extra})) f.set(k,v);
   f.set('front',new Blob([image],{type:'image/png'}),'front.png'); return f;
 }
-async function request(url, { method='GET', body, authenticated=false, origin='http://localhost:4173' }={}) {
+async function request(url, { method='GET', body, authenticated=false, origin='http://localhost:4173', redirect='follow' }={}) {
   const headers = { Origin:origin }; if (authenticated) headers.Cookie=cookie;
   if (body && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
-  return fetch(base+url,{method,headers,body});
+  return fetch(base+url,{method,headers,body,redirect});
 }
 before(async()=>{
   db.prepare('INSERT INTO admins (email,name,password) VALUES (?,?,?)').run('admin@example.test','Admin de prueba',await passwordHash('test-password-long'));
@@ -75,11 +75,20 @@ test('scheduled promotions and hidden benefits are excluded from public response
   const now=Date.now();
   for (const [title,start,end,active] of [['Vigente',now-3600000,now+3600000,'true'],['Futura',now+3600000,now+7200000,'true'],['Pasada',now-7200000,now-3600000,'true'],['Oculta',now-3600000,now+3600000,'false']]) {
     const f=new FormData(); for(const[k,v] of Object.entries({title,description:'Condiciones de prueba',starts_at:new Date(start).toISOString(),ends_at:new Date(end).toISOString(),active})) f.set(k,v);
+    if(title==='Vigente') f.set('image',new Blob([image],{type:'image/png'}),'promotion.png');
     assert.equal((await request('/api/admin/promotions',{method:'POST',authenticated:true,body:f})).status,200);
   }
   const content=await(await request('/api/content')).json(); assert.deepEqual(content.promotions.map(p=>p.title),['Vigente']);
+  const activePromotion=content.promotions[0]; const activeMember=db.prepare("SELECT token FROM members WHERE status='approved' ORDER BY id LIMIT 1").get(); assert.ok(activePromotion.image); assert.equal((await request(`/api/promotions/${activePromotion.image}`)).status,200);
+  const invalidClick=await request(`/api/promotions/${activePromotion.id}/whatsapp?member=invalid`,{redirect:'manual'}); assert.equal(invalidClick.status,404);
+  const click=await request(`/api/promotions/${activePromotion.id}/whatsapp?member=${activeMember.token}`,{redirect:'manual'}); assert.equal(click.status,302); assert.match(click.headers.get('location'),/^https:\/\/wa\.me\/50370690808\?text=/);
+  let kpis=await(await request('/api/admin/kpis',{authenticated:true})).json(); assert.equal(kpis.summary.promotionClicks,1); assert.equal(kpis.promotions.find(p=>p.id===activePromotion.id).clicks,1); assert.ok(kpis.summary.profileViews>=2); assert.ok(kpis.members.some(m=>m.profile_views>=2));
   const b=content.benefits[0]; await request(`/api/admin/benefits/${b.id}`,{method:'PUT',authenticated:true,body:{...b,active:false}});
   const after=await(await request('/api/content')).json(); assert.ok(!after.benefits.find(i=>i.id===b.id));
+  assert.equal((await request(`/api/admin/promotions/${activePromotion.id}`,{method:'DELETE',authenticated:true})).status,200);
+  assert.ok(!(await(await request('/api/content')).json()).promotions.some(p=>p.id===activePromotion.id));
+  await assert.rejects(readFile(path.join(testDir,'promotions',activePromotion.image)));
+  kpis=await(await request('/api/admin/kpis',{authenticated:true})).json(); assert.ok(kpis.promotions.find(p=>p.id===activePromotion.id).deleted_at); assert.equal(kpis.summary.promotionClicks,1);
 });
 
 test('logout invalidates the server-side session',async()=>{

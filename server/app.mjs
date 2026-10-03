@@ -13,6 +13,7 @@ import { db, dataDir, encrypt, decrypt, duiHash, normalizeDui, passwordMatches, 
 export const app = express();
 const production = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
 export const appUrl = new URL(process.env.APP_URL || 'http://localhost:4173').origin;
+const promotionsWhatsapp = '50370690808';
 const secure = process.env.COOKIE_SECURE === 'true';
 if (production && (!secure || !appUrl.startsWith('https://'))) throw new Error('Production requires HTTPS APP_URL and COOKIE_SECURE=true.');
 if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
@@ -48,7 +49,7 @@ function visibleContent() {
   const now = new Date().toISOString();
   return {
     benefits: db.prepare('SELECT * FROM benefits WHERE active=1 ORDER BY position,id').all(),
-    promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now)
+    promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now)
   };
 }
 async function cleanImage(file) {
@@ -94,9 +95,19 @@ app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ nam
   }
 }));
 app.get('/api/members/:token', (req, res) => {
-  const m = db.prepare("SELECT name,email,whatsapp,number,show_email,show_whatsapp,approved_at FROM members WHERE token=? AND status='approved'").get(req.params.token);
+  const m = db.prepare("SELECT id,name,email,whatsapp,number,show_email,show_whatsapp,approved_at FROM members WHERE token=? AND status='approved'").get(req.params.token);
   if (!m) return res.status(404).json({ error: 'Este perfil no está disponible. Comunícate con mercadeo de PELSA.' });
+  db.prepare('UPDATE members SET profile_views=profile_views+1 WHERE id=?').run(m.id);
   res.json({ name: m.name, number: memberNumber(m.number), email: m.show_email ? m.email : null, whatsapp: m.show_whatsapp ? m.whatsapp : null, approvedAt: m.approved_at, referralUrl: `${appUrl}/registro?ref=${memberNumber(m.number)}`, ...visibleContent() });
+});
+app.get('/api/promotions/:id/whatsapp', (req, res) => {
+  const now = new Date().toISOString();
+  const member = db.prepare("SELECT id FROM members WHERE token=? AND status='approved'").get(String(req.query.member || ''));
+  const promotion = db.prepare('SELECT id,title FROM promotions WHERE id=? AND deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=?').get(req.params.id, now, now);
+  if (!member || !promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
+  const message = `Hola, me interesa la promoción "${promotion.title}" del Club de Electricistas PELSA.`;
+  res.redirect(302, `https://wa.me/${promotionsWhatsapp}?text=${encodeURIComponent(message)}`);
 });
 app.get('/api/promotions/:file', wrap(async (req, res) => {
   if (!/^[a-f0-9]{40}\.jpg$/.test(req.params.file)) return res.sendStatus(404);
@@ -167,7 +178,15 @@ app.get('/api/admin/members/:id/qr', wrap(async (req, res) => {
   const png = await QRCode.toBuffer(url, { width: 1000, margin: 4, errorCorrectionLevel: 'M' });
   res.attachment(`${referral ? 'recomendacion' : 'perfil'}-${memberNumber(m.number)}.png`).type('png').send(png);
 }));
-app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions ORDER BY id DESC').all() }));
+app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all() }));
+app.get('/api/admin/kpis', (_req, res) => res.json({
+  summary: {
+    profileViews: db.prepare('SELECT COALESCE(SUM(profile_views),0) value FROM members').get().value,
+    promotionClicks: db.prepare('SELECT COALESCE(SUM(clicks),0) value FROM promotions').get().value
+  },
+  promotions: db.prepare('SELECT id,title,clicks,active,deleted_at FROM promotions ORDER BY clicks DESC,id DESC').all(),
+  members: db.prepare("SELECT id,name,number,status,profile_views FROM members WHERE number IS NOT NULL ORDER BY profile_views DESC,name").all().map(member => ({ ...member, number: memberNumber(member.number) }))
+}));
 const benefitSchema = z.object({ title: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(500), icon: z.enum(['calendar', 'graduation', 'tag', 'headset', 'gift', 'users']), position: z.coerce.number().int().min(0).max(100), active: z.boolean() });
 app.post('/api/admin/benefits', (req, res) => {
   const b = benefitSchema.parse(req.body);
@@ -183,7 +202,7 @@ app.put('/api/admin/benefits/:id', (req, res) => {
 const promotionSchema = z.object({ title: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(1500), starts_at: z.iso.datetime(), ends_at: z.iso.datetime(), active: z.enum(['true', 'false']).transform(v => v === 'true') }).refine(v => v.ends_at > v.starts_at, 'La fecha final debe ser posterior a la inicial.');
 async function savePromotion(req, res) {
   const p = promotionSchema.parse(req.body);
-  const existing = req.params.id ? db.prepare('SELECT * FROM promotions WHERE id=?').get(req.params.id) : null;
+  const existing = req.params.id ? db.prepare('SELECT * FROM promotions WHERE id=? AND deleted_at IS NULL').get(req.params.id) : null;
   if (req.params.id && !existing) return res.sendStatus(404);
   let image = existing?.image || null; let createdImage;
   if (req.file) {
@@ -199,8 +218,16 @@ async function savePromotion(req, res) {
 }
 app.post('/api/admin/promotions', upload.single('image'), wrap(savePromotion));
 app.put('/api/admin/promotions/:id', upload.single('image'), wrap(savePromotion));
+app.delete('/api/admin/promotions/:id', wrap(async (req, res) => {
+  const promotion = db.prepare('SELECT image FROM promotions WHERE id=? AND deleted_at IS NULL').get(req.params.id);
+  if (!promotion) return res.sendStatus(404);
+  const result = db.prepare("UPDATE promotions SET active=0,image=NULL,deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND deleted_at IS NULL").run(req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  if (promotion.image) await unlink(path.join(dataDir, 'promotions', promotion.image)).catch(() => {});
+  audit(req.admin.email, 'promotion.deleted', req.params.id); res.json({ ok: true });
+}));
 app.get('/api/admin/promotions/:id/image', wrap(async (req, res) => {
-  const p = db.prepare('SELECT image FROM promotions WHERE id=?').get(req.params.id);
+  const p = db.prepare('SELECT image FROM promotions WHERE id=? AND deleted_at IS NULL').get(req.params.id);
   if (!p?.image) return res.sendStatus(404);
   res.type('jpg').send(await readFile(path.join(dataDir, 'promotions', p.image)));
 }));
