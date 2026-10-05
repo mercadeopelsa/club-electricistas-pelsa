@@ -103,9 +103,21 @@ Para restaurar, use primero una instancia aislada, detenga el servicio, restaure
 3. Al aprobar se asignan número y token; el QR usa el enlace del perfil. Imprima QR únicamente después de configurar el dominio definitivo. Cambiar de servidor conservando dominio, base y clave conserva tarjetas. Cambiar de dominio exige mantener redirecciones del anterior o volver a imprimir.
 4. El administrador puede activar correo y/o WhatsApp públicos. Nombre y número siempre están visibles en perfiles aprobados. Quien recibe el QR puede compartirlo.
 5. Preparar WhatsApp abre un mensaje; no hay envío automático ni WhatsApp Business API.
-6. Las imágenes del DUI pueden descargarse individualmente para una carpeta de Google Drive con acceso restringido. No hay integración automática de Drive ni sincronización de la base.
+6. La fotografía frontal del DUI puede descargarse para una carpeta de Google Drive con acceso restringido. No hay integración automática de Drive ni sincronización de la base.
 7. Beneficios permite editar, ordenar y ocultar. Promociones permite imagen, condiciones, fechas y deshabilitación. El formulario de fechas usa explícitamente UTC−6; en base se guarda UTC.
 8. Suspender oculta el perfil, y reactivar conserva número/token. Rechazar exige motivo. Para corregir fotos de una solicitud rechazada, coordinar un flujo administrativo de reemplazo en una siguiente iteración; no se permite una segunda solicitud con el mismo DUI.
+
+## Importación privada desde Excel
+
+El archivo no debe copiarse al repositorio. Guárdelo temporalmente en una carpeta privada del servidor y asegúrese de tener una copia reciente de `DATA_DIR`. Desde la carpeta de la aplicación ejecute:
+
+```powershell
+npm run import-members -- "C:\ruta\CLUB SS .xlsx"
+```
+
+La primera hoja debe tener exactamente las columnas `NOMBRE`, `WHATSAPP`, `CORREO` y `DUI`. La herramienta valida todas las filas antes de modificar la base, agrega el prefijo 503 a teléfonos de ocho dígitos, omite DUI repetidos dentro del archivo o ya existentes, asigna números correlativos y activa los perfiles inmediatamente. Los miembros importados no tienen fotografía del DUI almacenada.
+
+El resultado se guarda dentro de `DATA_DIR/imports/` con nombre, número de miembro y URL del perfil. Esa carpeta y el archivo original contienen datos personales; manténgalos fuera de GitHub y con acceso restringido. La importación es idempotente: ejecutar el mismo archivo otra vez no duplica los miembros.
 
 ## Antes de abrir al público
 
@@ -113,13 +125,13 @@ Para restaurar, use primero una instancia aislada, detenga el servicio, restaure
 - Completar el aviso institucional de privacidad: contacto, retención y proceso de eliminación/corrección. El texto actual está identificado como versión de desarrollo.
 - Definir beneficios finales y cargar promociones reales. La marca tipográfica actual es aproximada; sustituir con logotipo oficial cuando esté disponible.
 - Activar respaldos, probar restauración y monitorear espacio en disco.
-- Probar carga y documentos desde el dominio HTTPS, y que el proxy preserve límites de tamaño (13 MB total).
+- Probar carga y documentos desde el dominio HTTPS, y que el proxy permita solicitudes de al menos 7 MB.
 - Confirmar que rutas privadas devuelven 401 sin sesión y que los documentos nunca se sirven desde rutas públicas.
 - Ajustar límites de solicitudes si varios usuarios comparten una IP: actualmente 10 registros por hora/IP y 10 intentos de login cada 15 minutos/IP.
 
 ## Alcance pendiente
 
-No incluye integración con POS, puntos, logros automáticos, canjes, roles diferenciados, OCR ni carga Excel (archivo pendiente). Se almacena la recomendación pero no se acreditan recompensas. La carga Excel deberá respetar unicidad del DUI, numeración y estado de aprobación. No hay restablecimiento de contraseña por correo ni MFA todavía; los accesos los administra IT.
+No incluye integración con POS, puntos, logros automáticos, canjes, roles diferenciados ni OCR. Se almacena la recomendación pero no se acreditan recompensas. No hay restablecimiento de contraseña por correo ni MFA todavía; los accesos los administra IT.
 
 Netlify no ejecuta este servidor persistente como una subida estática. Adoptarlo implica adaptar API a Functions y sustituir SQLite/archivos por almacenamiento persistente apropiado. Docker mantiene el código actual más fácil de trasladar al servidor propio.
 

@@ -43,7 +43,7 @@ function auth(req, res, next) {
 const memberNumber = n => n == null ? null : String(n).padStart(6, '0');
 function adminMember(m) {
   const { dui_hash, dui_encrypted, front_file, back_file, ...safe } = m;
-  return { ...safe, number: memberNumber(m.number), dui: decrypt(dui_encrypted).toString(), profileUrl: m.token ? `${appUrl}/m/${m.token}` : null };
+  return { ...safe, number: memberNumber(m.number), dui: decrypt(dui_encrypted).toString(), hasFrontDocument: Boolean(front_file), profileUrl: m.token ? `${appUrl}/m/${m.token}` : null };
 }
 function visibleContent() {
   const now = new Date().toISOString();
@@ -163,7 +163,7 @@ app.patch('/api/admin/members/:id', (req, res) => {
 app.get('/api/admin/members/:id/documents/:side', wrap(async (req, res) => {
   if (req.params.side !== 'front') return res.sendStatus(404);
   const m = db.prepare('SELECT front_file FROM members WHERE id=?').get(req.params.id);
-  if (!m) return res.sendStatus(404);
+  if (!m?.front_file) return res.sendStatus(404);
   const file = m.front_file;
   const body = decrypt(await readFile(path.join(dataDir, 'documents', file)));
   audit(req.admin.email, req.query.download === '1' ? 'document.downloaded' : 'document.viewed', `${req.params.id}:${req.params.side}`);

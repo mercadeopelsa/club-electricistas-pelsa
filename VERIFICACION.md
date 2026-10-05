@@ -1,4 +1,4 @@
-# Verificación del MVP — 3 de octubre de 2026
+# Verificación del MVP — 5 de octubre de 2026
 
 ## Resultado
 
@@ -6,7 +6,7 @@ La aplicación compila y los flujos principales funcionan con datos ficticios. N
 
 ## Pruebas automatizadas
 
-Ejecutadas con `pnpm run test`: 4 pruebas aprobadas, 0 fallidas.
+Ejecutadas con `pnpm run test`: 5 pruebas aprobadas, 0 fallidas.
 
 - Registro pendiente con la fotografía frontal, normalización y rechazo de DUI duplicado.
 - Rechazo de archivos inválidos y códigos de recomendación inexistentes sin dejar archivos huérfanos.
@@ -18,6 +18,7 @@ Ejecutadas con `pnpm run test`: 4 pruebas aprobadas, 0 fallidas.
 - Seguimiento del total de visitas a perfiles y de interacciones por promoción.
 - Apertura de WhatsApp al número de PELSA y conservación del KPI al eliminar una promoción.
 - Eliminación de la imagen almacenada cuando se elimina una promoción.
+- Importación Excel idempotente: aprobación inmediata, número correlativo, perfil digital, omisión de DUI duplicados y ausencia controlada de fotografía.
 - Beneficios ocultos excluidos de las vistas públicas.
 - Cierre de sesión invalidado en el servidor.
 

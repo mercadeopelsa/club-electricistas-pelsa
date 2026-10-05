@@ -1,0 +1,40 @@
+import test, { after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import ExcelJS from 'exceljs';
+
+const testDir = await mkdtemp(path.join(os.tmpdir(), 'pelsa-import-test-'));
+process.env.DATA_DIR = testDir;
+process.env.DATA_KEY = randomBytes(32).toString('hex');
+process.env.APP_URL = 'https://club.example.test';
+const { db, decrypt } = await import('../server/db.mjs');
+const { importMembersFromExcel } = await import('../scripts/import-members.mjs');
+
+after(async () => {
+  db.close();
+  const target = path.resolve(testDir); assert.ok(target.startsWith(path.resolve(os.tmpdir()) + path.sep)); assert.ok(path.basename(target).startsWith('pelsa-import-test-'));
+  await rm(target, { recursive:true, force:true });
+});
+
+test('Excel import approves unique members, assigns profiles and is idempotent', async () => {
+  const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('Miembros');
+  sheet.addRow(['NOMBRE','WHATSAPP','CORREO','DUI']);
+  sheet.addRow(['Persona Uno',70000000,'uno@example.test','012345678']);
+  sheet.addRow(['Persona Uno duplicada',70000000,'uno@example.test','012345678']);
+  sheet.addRow(['Persona Dos','50371111111','dos@example.test','123456789']);
+  const input = path.join(testDir,'miembros.xlsx'); await workbook.xlsx.writeFile(input);
+
+  const first = await importMembersFromExcel(input);
+  assert.equal(first.imported,2); assert.equal(first.duplicates,1); assert.equal(first.existing,0);
+  const members = db.prepare('SELECT * FROM members ORDER BY number').all();
+  assert.deepEqual(members.map(member => [member.number,member.status,member.front_file]),[[1,'approved',''],[2,'approved','']]);
+  assert.equal(decrypt(members[0].dui_encrypted).toString(),'012345678'); assert.equal(members[0].whatsapp,'50370000000'); assert.equal(members[0].token.length,48);
+  const report = await readFile(first.reportPath,'utf8'); assert.match(report,/https:\/\/club\.example\.test\/m\//);
+
+  const second = await importMembersFromExcel(input);
+  assert.equal(second.imported,0); assert.equal(second.existing,2); assert.equal(second.duplicates,1);
+  assert.equal(db.prepare('SELECT COUNT(*) count FROM members').get().count,2);
+});

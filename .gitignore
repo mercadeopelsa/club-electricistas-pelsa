@@ -5,3 +5,6 @@ dist/
 data/
 *.log
 playwright-report/
+*.xlsx
+*.xls
+*.csv
