@@ -19,7 +19,7 @@ after(async () => {
   await rm(target, { recursive:true, force:true });
 });
 
-test('Excel import approves unique members, assigns profiles and is idempotent', async () => {
+test('Excel import approves every row, permits repeated DUI and is idempotent', async () => {
   const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('Miembros');
   sheet.addRow(['NOMBRE','WHATSAPP','CORREO','DUI']);
   sheet.addRow(['Persona Uno',70000000,'uno@example.test','012345678']);
@@ -28,13 +28,14 @@ test('Excel import approves unique members, assigns profiles and is idempotent',
   const input = path.join(testDir,'miembros.xlsx'); await workbook.xlsx.writeFile(input);
 
   const first = await importMembersFromExcel(input);
-  assert.equal(first.imported,2); assert.equal(first.duplicates,1); assert.equal(first.existing,0);
+  assert.equal(first.imported,3); assert.equal(first.duplicates,1); assert.equal(first.existing,0);
   const members = db.prepare('SELECT * FROM members ORDER BY number').all();
-  assert.deepEqual(members.map(member => [member.number,member.status,member.front_file]),[[1,'approved',''],[2,'approved','']]);
+  assert.deepEqual(members.map(member => [member.number,member.status,member.front_file]),[[1,'approved',''],[2,'approved',''],[3,'approved','']]);
   assert.equal(decrypt(members[0].dui_encrypted).toString(),'012345678'); assert.equal(members[0].whatsapp,'50370000000'); assert.equal(members[0].token.length,48);
+  assert.equal(decrypt(members[1].dui_encrypted).toString(),'012345678'); assert.notEqual(members[0].dui_hash,members[1].dui_hash);
   const report = await readFile(first.reportPath,'utf8'); assert.match(report,/https:\/\/club\.example\.test\/m\//);
 
   const second = await importMembersFromExcel(input);
-  assert.equal(second.imported,0); assert.equal(second.existing,2); assert.equal(second.duplicates,1);
-  assert.equal(db.prepare('SELECT COUNT(*) count FROM members').get().count,2);
+  assert.equal(second.imported,0); assert.equal(second.existing,3); assert.equal(second.duplicates,1);
+  assert.equal(db.prepare('SELECT COUNT(*) count FROM members').get().count,3);
 });

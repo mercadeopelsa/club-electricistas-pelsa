@@ -23,7 +23,7 @@ export async function importMembersFromExcel(filePath) {
   const headers = expectedHeaders.map((_, index) => cleanText(sheet.getCell(1, index + 1).text).toUpperCase());
   if (headers.some((header, index) => header !== expectedHeaders[index])) throw new Error(`La primera fila debe contener: ${expectedHeaders.join(', ')}.`);
 
-  const candidates = []; const issues = []; const duplicateRows = []; const seenDui = new Map();
+  const candidates = []; const issues = []; const duplicateRows = []; const seenDui = new Map(); const seenRecord = new Map();
   for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
     const name = cleanText(row.getCell(1).text);
@@ -38,8 +38,11 @@ export async function importMembersFromExcel(filePath) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) rowIssues.push('correo inválido');
     if (!/^\d{9}$/.test(dui)) rowIssues.push('DUI inválido');
     if (rowIssues.length) { issues.push(`Fila ${rowNumber}: ${rowIssues.join(', ')}`); continue; }
-    if (seenDui.has(dui)) { duplicateRows.push({ row: rowNumber, keptRow: seenDui.get(dui) }); continue; }
-    seenDui.set(dui, rowNumber); candidates.push({ rowNumber, name, whatsapp, email, dui });
+    if (seenDui.has(dui)) duplicateRows.push({ row: rowNumber, keptRow: seenDui.get(dui) });
+    else seenDui.set(dui, rowNumber);
+    const signature = [name.toLowerCase(), whatsapp, email, dui].join('|');
+    const occurrence = (seenRecord.get(signature) || 0) + 1; seenRecord.set(signature, occurrence);
+    candidates.push({ rowNumber, name, whatsapp, email, dui, importKey:duiHash(`legacy-excel-v2|${signature}|${occurrence}`) });
   }
   if (issues.length) throw new Error(`No se importó ningún miembro. Corrige estos problemas:\n${issues.slice(0, 20).join('\n')}${issues.length > 20 ? `\n…y ${issues.length - 20} más.` : ''}`);
   if (!candidates.length) throw new Error('No encontramos filas válidas para importar.');
@@ -48,14 +51,23 @@ export async function importMembersFromExcel(filePath) {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare("UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(number) FROM members),0)) WHERE name='member'").run();
-    const findMember = db.prepare('SELECT id,number FROM members WHERE dui_hash=?');
+    const findImported = db.prepare('SELECT id,number FROM members WHERE import_key=?');
+    const findMember = db.prepare('SELECT id,number,name,email,whatsapp,import_key FROM members WHERE dui_hash=?');
+    const claimExisting = db.prepare('UPDATE members SET import_key=? WHERE id=? AND import_key IS NULL');
     const nextNumber = db.prepare("UPDATE counters SET value=value+1 WHERE name='member' RETURNING value");
-    const insert = db.prepare("INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,status,number,token,review_note,consent_at,consent_version,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    const insert = db.prepare("INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,status,number,token,review_note,consent_at,consent_version,approved_at,import_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     for (const member of candidates) {
-      const hash = duiHash(member.dui); const found = findMember.get(hash);
-      if (found) { existing.push({ rowNumber:member.rowNumber, number:found.number == null ? '' : String(found.number).padStart(6, '0') }); continue; }
+      const alreadyImported = findImported.get(member.importKey);
+      if (alreadyImported) { existing.push({ rowNumber:member.rowNumber, number:alreadyImported.number == null ? '' : String(alreadyImported.number).padStart(6, '0') }); continue; }
+      const baseHash = duiHash(member.dui); const found = findMember.get(baseHash);
+      if (found && found.import_key == null && found.name === member.name && found.email === member.email && found.whatsapp === member.whatsapp) {
+        claimExisting.run(member.importKey, found.id);
+        existing.push({ rowNumber:member.rowNumber, number:found.number == null ? '' : String(found.number).padStart(6, '0') });
+        continue;
+      }
+      const hash = found ? duiHash(`legacy-excel-duplicate-v2|${member.importKey}`) : baseHash;
       const number = nextNumber.get().value; const token = randomBytes(24).toString('hex'); const now = new Date().toISOString();
-      const result = insert.run(member.name, member.email, member.whatsapp, hash, encrypt(Buffer.from(member.dui)), '', '', 'approved', number, token, 'Importado desde Excel como miembro aprobado.', now, 'legacy-excel-import-2026-10', now);
+      const result = insert.run(member.name, member.email, member.whatsapp, hash, encrypt(Buffer.from(member.dui)), '', '', 'approved', number, token, 'Importado desde Excel como miembro aprobado; los DUI repetidos fueron autorizados para el padrón inicial.', now, 'legacy-excel-import-2026-10', now, member.importKey);
       audit('system:excel-import', 'member.imported', result.lastInsertRowid);
       imported.push({ name:member.name, number:String(number).padStart(6, '0'), profileUrl:`${appUrl}/m/${token}` });
     }
@@ -77,8 +89,8 @@ if (invokedDirectly) {
   else {
     try {
       const result = await importMembersFromExcel(filePath);
-      console.log(`Importación completada: ${result.imported} miembros nuevos, ${result.existing} ya existentes y ${result.duplicates} filas duplicadas omitidas.`);
-      if (result.duplicateRows.length) console.log(`Filas duplicadas omitidas: ${result.duplicateRows.map(item => `${item.row} (repite la ${item.keptRow})`).join(', ')}.`);
+      console.log(`Importación completada: ${result.imported} miembros nuevos, ${result.existing} ya existentes y ${result.duplicates} filas con DUI repetido incluidas.`);
+      if (result.duplicateRows.length) console.log(`Filas con DUI repetido incluidas: ${result.duplicateRows.map(item => `${item.row} (repite la ${item.keptRow})`).join(', ')}.`);
       console.log(`Reporte privado: ${result.reportPath}`);
     } catch (error) { console.error(error.message); process.exitCode = 1; }
   }

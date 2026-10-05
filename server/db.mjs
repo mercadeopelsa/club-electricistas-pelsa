@@ -17,8 +17,10 @@ function ensureColumn(table, column, definition) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 ensureColumn('members', 'profile_views', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('members', 'import_key', 'TEXT');
 ensureColumn('promotions', 'clicks', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('promotions', 'deleted_at', 'TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_members_import_key ON members(import_key) WHERE import_key IS NOT NULL;');
 export function encrypt(data) {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);

@@ -115,9 +115,9 @@ El archivo no debe copiarse al repositorio. Guárdelo temporalmente en una carpe
 npm run import-members -- "C:\ruta\CLUB SS .xlsx"
 ```
 
-La primera hoja debe tener exactamente las columnas `NOMBRE`, `WHATSAPP`, `CORREO` y `DUI`. La herramienta valida todas las filas antes de modificar la base, agrega el prefijo 503 a teléfonos de ocho dígitos, omite DUI repetidos dentro del archivo o ya existentes, asigna números correlativos y activa los perfiles inmediatamente. Los miembros importados no tienen fotografía del DUI almacenada.
+La primera hoja debe tener exactamente las columnas `NOMBRE`, `WHATSAPP`, `CORREO` y `DUI`. La herramienta valida todas las filas antes de modificar la base, agrega el prefijo 503 a teléfonos de ocho dígitos, incluye las filas del padrón inicial aunque repitan DUI, asigna números correlativos y activa los perfiles inmediatamente. El formulario público continúa bloqueando nuevos registros con un DUI ya inscrito. Los miembros importados no tienen fotografía del DUI almacenada.
 
-El resultado se guarda dentro de `DATA_DIR/imports/` con nombre, número de miembro y URL del perfil. Esa carpeta y el archivo original contienen datos personales; manténgalos fuera de GitHub y con acceso restringido. La importación es idempotente: ejecutar el mismo archivo otra vez no duplica los miembros.
+El resultado se guarda dentro de `DATA_DIR/imports/` con nombre, número de miembro y URL del perfil. Esa carpeta y el archivo original contienen datos personales; manténgalos fuera de GitHub y con acceso restringido. La importación es idempotente por cada fila normalizada: ejecutar el mismo archivo otra vez no duplica los miembros, incluso cuando contiene varias filas con el mismo DUI.
 
 ## Antes de abrir al público
 
