@@ -9,6 +9,7 @@ import '@fontsource/dm-sans/latin-700.css';
 import '@fontsource/barlow-condensed/latin-800.css';
 import '@fontsource/barlow-condensed/latin-800-italic.css';
 import './style.css';
+import './brand.css';
 
 export async function api(url, options = {}) {
   const response = await fetch(url, { credentials: 'same-origin', ...options, headers: options.body instanceof FormData ? options.headers : { 'Content-Type': 'application/json', ...options.headers } });
@@ -18,7 +19,7 @@ export async function api(url, options = {}) {
 }
 const icons = { calendar: CalendarDays, graduation: GraduationCap, tag: Tag, headset: Headset, gift: Gift, users: Users };
 const date = v => new Date(v).toLocaleDateString('es-SV', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'America/El_Salvador' });
-export function Brand({ small = false }) { return <a className={`brand ${small ? 'small' : ''}`} href="/" aria-label="Club de Electricistas PELSA, inicio"><span className="wordmark">PEL<Zap aria-hidden="true" fill="currentColor"/>A</span><span className="brand-caption">CLUB DE ELECTRICISTAS</span></a>; }
+export function Brand({ small = false }) { return <a className={`brand ${small ? 'small' : ''}`} href="/" aria-label="Club de Electricistas PELSA, inicio"><img className="brand-logo" src="/assets/club-electricistas-logo.png" alt="Club de Electricistas PELSA"/></a>; }
 function Icon({ name, ...props }) { const Component = icons[name] || Tag; return <Component {...props}/>; }
 export function Notice({ children, success = false }) { return children ? <div role={success ? 'status' : 'alert'} className={`notice ${success ? 'success' : ''}`}>{success ? <CheckCircle2 size={19}/> : <AlertCircle size={19}/>}<span>{children}</span></div> : null; }
 export function Busy() { return <div className="loading" role="status"><span className="spinner"/>Cargando…</div>; }

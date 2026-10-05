@@ -1,0 +1,57 @@
+.public-page {
+  min-height: 100vh;
+  background-color: #171416;
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.72)),
+    url('/assets/registration-background.webp');
+  background-position: center top;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+.public-page .story-top::before {
+  display: none;
+}
+
+.brand-logo {
+  display: block;
+  width: 260px;
+  max-width: 44vw;
+  height: auto;
+}
+
+.brand.small .brand-logo,
+.admin-sidebar .brand-logo {
+  width: 185px;
+  max-width: 100%;
+}
+
+@media (max-width: 800px) {
+  .admin-sidebar .brand-logo {
+    width: 125px;
+  }
+}
+
+@media (max-width: 740px) {
+  .public-page {
+    background-attachment: scroll;
+    background-position: 58% top;
+  }
+
+  .brand-logo {
+    width: 205px;
+    max-width: 62vw;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-sidebar .brand-logo {
+    width: 105px;
+  }
+}
+
+@media (max-width: 390px) {
+  .brand-logo {
+    width: 180px;
+  }
+}
