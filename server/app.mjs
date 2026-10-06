@@ -106,7 +106,7 @@ app.get('/api/promotions/:id/whatsapp', (req, res) => {
   const promotion = db.prepare('SELECT id,title FROM promotions WHERE id=? AND deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=?').get(req.params.id, now, now);
   if (!member || !promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
   db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
-  const message = `Hola, me interesa la promoción "${promotion.title}" del Club de Electricistas PELSA.`;
+  const message = `Me gustaría cotizar ${promotion.title}`;
   res.redirect(302, `https://wa.me/${promotionsWhatsapp}?text=${encodeURIComponent(message)}`);
 });
 app.get('/api/promotions/:file', wrap(async (req, res) => {
