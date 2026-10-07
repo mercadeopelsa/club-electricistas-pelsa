@@ -102,21 +102,24 @@ app.get('/api/members/:token', (req, res) => {
 });
 function activePromotionForMember(req) {
   const now = new Date().toISOString();
-  const member = db.prepare("SELECT id FROM members WHERE token=? AND status='approved'").get(String(req.query.member || ''));
-  const promotion = db.prepare('SELECT id,title FROM promotions WHERE id=? AND deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=?').get(req.params.id, now, now);
-  return member && promotion ? promotion : null;
+  const member = db.prepare("SELECT id,name FROM members WHERE token=? AND status='approved'").get(String(req.query.member || ''));
+  const promotion = db.prepare('SELECT id,title,image FROM promotions WHERE id=? AND deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=?').get(req.params.id, now, now);
+  return member && promotion ? { member, promotion } : null;
 }
 app.post('/api/promotions/:id/click', (req, res) => {
-  const promotion = activePromotionForMember(req);
-  if (!promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  const match = activePromotionForMember(req);
+  if (!match) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  const { promotion } = match;
   db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
   res.sendStatus(204);
 });
 app.get('/api/promotions/:id/whatsapp', (req, res) => {
-  const promotion = activePromotionForMember(req);
-  if (!promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  const match = activePromotionForMember(req);
+  if (!match) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  const { member, promotion } = match;
   db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
-  const message = `Me gustaría cotizar ${promotion.title}`;
+  const imageUrl = promotion.image ? `${appUrl}/api/promotions/${promotion.image}` : '';
+  const message = `Estoy interesado en este producto: ${promotion.title}${imageUrl ? `\n${imageUrl}` : ''}\nSoy ${member.name}, miembro del Club de Electricistas.`;
   const whatsappUrl = `https://wa.me/${promotionsWhatsapp}?text=${encodeURIComponent(message)}`;
   const safeUrl = whatsappUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
   res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="refresh" content="0;url=${safeUrl}"><title>Abriendo WhatsApp</title></head><body><p><a href="${safeUrl}">Abrir WhatsApp</a></p></body></html>`);
