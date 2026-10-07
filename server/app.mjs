@@ -100,14 +100,26 @@ app.get('/api/members/:token', (req, res) => {
   db.prepare('UPDATE members SET profile_views=profile_views+1 WHERE id=?').run(m.id);
   res.json({ name: m.name, number: memberNumber(m.number), email: m.show_email ? m.email : null, whatsapp: m.show_whatsapp ? m.whatsapp : null, approvedAt: m.approved_at, referralUrl: `${appUrl}/registro?ref=${memberNumber(m.number)}`, ...visibleContent() });
 });
-app.get('/api/promotions/:id/whatsapp', (req, res) => {
+function activePromotionForMember(req) {
   const now = new Date().toISOString();
   const member = db.prepare("SELECT id FROM members WHERE token=? AND status='approved'").get(String(req.query.member || ''));
   const promotion = db.prepare('SELECT id,title FROM promotions WHERE id=? AND deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=?').get(req.params.id, now, now);
-  if (!member || !promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  return member && promotion ? promotion : null;
+}
+app.post('/api/promotions/:id/click', (req, res) => {
+  const promotion = activePromotionForMember(req);
+  if (!promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
+  db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
+  res.sendStatus(204);
+});
+app.get('/api/promotions/:id/whatsapp', (req, res) => {
+  const promotion = activePromotionForMember(req);
+  if (!promotion) return res.status(404).json({ error: 'Esta promoción ya no está disponible.' });
   db.prepare('UPDATE promotions SET clicks=clicks+1 WHERE id=?').run(promotion.id);
   const message = `Me gustaría cotizar ${promotion.title}`;
-  res.redirect(302, `https://wa.me/${promotionsWhatsapp}?text=${encodeURIComponent(message)}`);
+  const whatsappUrl = `https://wa.me/${promotionsWhatsapp}?text=${encodeURIComponent(message)}`;
+  const safeUrl = whatsappUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+  res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="refresh" content="0;url=${safeUrl}"><title>Abriendo WhatsApp</title></head><body><p><a href="${safeUrl}">Abrir WhatsApp</a></p></body></html>`);
 });
 app.get('/api/promotions/:file', wrap(async (req, res) => {
   if (!/^[a-f0-9]{40}\.jpg$/.test(req.params.file)) return res.sendStatus(404);

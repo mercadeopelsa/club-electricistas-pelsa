@@ -80,8 +80,8 @@ test('scheduled promotions and hidden benefits are excluded from public response
   }
   const content=await(await request('/api/content')).json(); assert.deepEqual(content.promotions.map(p=>p.title),['Vigente']);
   const activePromotion=content.promotions[0]; const activeMember=db.prepare("SELECT token FROM members WHERE status='approved' ORDER BY id LIMIT 1").get(); assert.ok(activePromotion.image); assert.equal((await request(`/api/promotions/${activePromotion.image}`)).status,200);
-  const invalidClick=await request(`/api/promotions/${activePromotion.id}/whatsapp?member=invalid`,{redirect:'manual'}); assert.equal(invalidClick.status,404);
-  const click=await request(`/api/promotions/${activePromotion.id}/whatsapp?member=${activeMember.token}`,{redirect:'manual'}); assert.equal(click.status,302); assert.match(click.headers.get('location'),/^https:\/\/wa\.me\/50370690808\?text=/); assert.equal(new URL(click.headers.get('location')).searchParams.get('text'),'Me gustaría cotizar Vigente');
+  const invalidClick=await request(`/api/promotions/${activePromotion.id}/click?member=invalid`,{method:'POST'}); assert.equal(invalidClick.status,404);
+  const click=await request(`/api/promotions/${activePromotion.id}/click?member=${activeMember.token}`,{method:'POST'}); assert.equal(click.status,204);
   let kpis=await(await request('/api/admin/kpis',{authenticated:true})).json(); assert.equal(kpis.summary.promotionClicks,1); assert.equal(kpis.promotions.find(p=>p.id===activePromotion.id).clicks,1); assert.ok(kpis.summary.profileViews>=2); assert.ok(kpis.members.some(m=>m.profile_views>=2));
   const b=content.benefits[0]; await request(`/api/admin/benefits/${b.id}`,{method:'PUT',authenticated:true,body:{...b,active:false}});
   const after=await(await request('/api/content')).json(); assert.ok(!after.benefits.find(i=>i.id===b.id));
