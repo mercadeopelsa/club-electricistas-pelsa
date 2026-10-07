@@ -18,7 +18,7 @@ const secure = process.env.COOKIE_SECURE === 'true';
 if (production && (!secure || !appUrl.startsWith('https://'))) throw new Error('Production requires HTTPS APP_URL and COOKIE_SECURE=true.');
 if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: production ? { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'"], upgradeInsecureRequests: [] } } : false, crossOriginEmbedderPolicy: false, strictTransportSecurity: secure ? undefined : false }));
+app.use(helmet({ contentSecurityPolicy: production ? { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'"], frameSrc: ["'self'", 'https://www.youtube-nocookie.com', 'https://www.instagram.com', 'https://www.facebook.com', 'https://www.tiktok.com'], upgradeInsecureRequests: [] } } : false, crossOriginEmbedderPolicy: false, strictTransportSecurity: secure ? undefined : false }));
 app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use((req, res, next) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin !== appUrl) return res.status(403).json({ error: 'Origen no permitido. Actualiza la página e inténtalo de nuevo.' });
@@ -49,7 +49,8 @@ function visibleContent() {
   const now = new Date().toISOString();
   return {
     benefits: db.prepare('SELECT * FROM benefits WHERE active=1 ORDER BY position,id').all(),
-    promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now)
+    promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now),
+    events: db.prepare('SELECT id,title,description,location,starts_at,ends_at,registration_url,image,video_embed,video_provider FROM events WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id').all(now)
   };
 }
 async function cleanImage(file) {
@@ -131,6 +132,13 @@ app.get('/api/promotions/:file', wrap(async (req, res) => {
   if (!p) return res.sendStatus(404);
   res.type('jpg').send(await readFile(path.join(dataDir, 'promotions', req.params.file)));
 }));
+app.get('/api/events/media/:file', wrap(async (req, res) => {
+  if (!/^[a-f0-9]{40}\.jpg$/.test(req.params.file)) return res.sendStatus(404);
+  const now = new Date().toISOString();
+  const event = db.prepare('SELECT id FROM events WHERE image=? AND deleted_at IS NULL AND active=1 AND ends_at>=?').get(req.params.file, now);
+  if (!event) return res.sendStatus(404);
+  res.type('jpg').send(await readFile(path.join(dataDir, 'events', req.params.file)));
+}));
 app.post('/api/login', limited(10, 15 * 60 * 1000), wrap(async (req, res) => {
   const { email, password } = z.object({ email: z.string().max(254), password: z.string().max(200) }).parse(req.body);
   const admin = db.prepare('SELECT * FROM admins WHERE email=? AND active=1').get(email.trim().toLowerCase());
@@ -193,7 +201,7 @@ app.get('/api/admin/members/:id/qr', wrap(async (req, res) => {
   const png = await QRCode.toBuffer(url, { width: 1000, margin: 4, errorCorrectionLevel: 'M' });
   res.attachment(`${referral ? 'recomendacion' : 'perfil'}-${memberNumber(m.number)}.png`).type('png').send(png);
 }));
-app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all() }));
+app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all(), events: db.prepare('SELECT * FROM events WHERE deleted_at IS NULL ORDER BY starts_at,id').all() }));
 app.get('/api/admin/kpis', (_req, res) => res.json({
   summary: {
     profileViews: db.prepare('SELECT COALESCE(SUM(profile_views),0) value FROM members').get().value,
@@ -246,12 +254,68 @@ app.get('/api/admin/promotions/:id/image', wrap(async (req, res) => {
   if (!p?.image) return res.sendStatus(404);
   res.type('jpg').send(await readFile(path.join(dataDir, 'promotions', p.image)));
 }));
+function normalizeVideoUrl(value) {
+  if (!value) return { url: '', embed: '', provider: '' };
+  let url;
+  try { url = new URL(value); } catch { throw new Error('VIDEO:Ingresa un enlace de video válido.'); }
+  if (url.protocol !== 'https:') throw new Error('VIDEO:El enlace del video debe comenzar con https://.');
+  const host = url.hostname.replace(/^www\./, '').toLowerCase();
+  let match;
+  if (host === 'youtu.be' || host === 'youtube.com' || host === 'm.youtube.com') {
+    const id = host === 'youtu.be' ? url.pathname.split('/')[1] : url.searchParams.get('v') || url.pathname.match(/^\/(?:shorts|embed)\/([\w-]+)/)?.[1];
+    if (!/^[\w-]{6,20}$/.test(id || '')) throw new Error('VIDEO:No pudimos reconocer ese video de YouTube.');
+    return { url: value, embed: `https://www.youtube-nocookie.com/embed/${id}`, provider: 'youtube' };
+  }
+  if ((host === 'instagram.com' || host === 'm.instagram.com') && (match = url.pathname.match(/^\/(p|reel|tv)\/([\w-]+)/))) return { url: value, embed: `https://www.instagram.com/${match[1]}/${match[2]}/embed/`, provider: 'instagram' };
+  if ((host === 'tiktok.com' || host === 'm.tiktok.com') && (match = url.pathname.match(/\/video\/(\d+)/))) return { url: value, embed: `https://www.tiktok.com/player/v1/${match[1]}`, provider: 'tiktok' };
+  if (host === 'facebook.com' || host === 'm.facebook.com' || host === 'fb.watch') return { url: value, embed: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(value)}&show_text=false`, provider: 'facebook' };
+  throw new Error('VIDEO:Usa un enlace público de YouTube, Instagram, Facebook o TikTok.');
+}
+const eventSchema = z.object({
+  title: z.string().trim().min(3).max(120), description: z.string().trim().min(3).max(2000), location: z.string().trim().min(2).max(160),
+  starts_at: z.iso.datetime(), ends_at: z.iso.datetime(), registration_url: z.string().trim().max(1000).refine(v => !v || /^https:\/\//i.test(v), 'El enlace de inscripción debe comenzar con https://.'),
+  video_url: z.string().trim().max(1000).default(''), active: z.enum(['true', 'false']).transform(v => v === 'true')
+}).refine(v => v.ends_at > v.starts_at, 'La fecha final debe ser posterior a la inicial.');
+async function saveEvent(req, res) {
+  const event = eventSchema.parse(req.body);
+  const video = normalizeVideoUrl(event.video_url);
+  const existing = req.params.id ? db.prepare('SELECT * FROM events WHERE id=? AND deleted_at IS NULL').get(req.params.id) : null;
+  if (req.params.id && !existing) return res.sendStatus(404);
+  let image = existing?.image || null; let createdImage;
+  if (req.file) {
+    const bytes = await cleanImage(req.file); createdImage = `${randomBytes(20).toString('hex')}.jpg`;
+    await writeFile(path.join(dataDir, 'events', createdImage), bytes); image = createdImage;
+  }
+  try {
+    let id = req.params.id;
+    const values = [event.title, event.description, event.location, event.starts_at, event.ends_at, event.registration_url, image, video.url, video.embed, video.provider, +event.active];
+    if (existing) db.prepare('UPDATE events SET title=?,description=?,location=?,starts_at=?,ends_at=?,registration_url=?,image=?,video_url=?,video_embed=?,video_provider=?,active=? WHERE id=?').run(...values, id);
+    else id = Number(db.prepare('INSERT INTO events (title,description,location,starts_at,ends_at,registration_url,image,video_url,video_embed,video_provider,active) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(...values).lastInsertRowid);
+    if (createdImage && existing?.image) await unlink(path.join(dataDir, 'events', existing.image)).catch(() => {});
+    audit(req.admin.email, 'event.saved', id); res.json({ id });
+  } catch (err) { if (createdImage) await unlink(path.join(dataDir, 'events', createdImage)).catch(() => {}); throw err; }
+}
+app.post('/api/admin/events', upload.single('image'), wrap(saveEvent));
+app.put('/api/admin/events/:id', upload.single('image'), wrap(saveEvent));
+app.delete('/api/admin/events/:id', wrap(async (req, res) => {
+  const event = db.prepare('SELECT image FROM events WHERE id=? AND deleted_at IS NULL').get(req.params.id);
+  if (!event) return res.sendStatus(404);
+  db.prepare("UPDATE events SET active=0,image=NULL,deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").run(req.params.id);
+  if (event.image) await unlink(path.join(dataDir, 'events', event.image)).catch(() => {});
+  audit(req.admin.email, 'event.deleted', req.params.id); res.json({ ok: true });
+}));
+app.get('/api/admin/events/:id/image', wrap(async (req, res) => {
+  const event = db.prepare('SELECT image FROM events WHERE id=? AND deleted_at IS NULL').get(req.params.id);
+  if (!event?.image) return res.sendStatus(404);
+  res.type('jpg').send(await readFile(path.join(dataDir, 'events', event.image)));
+}));
 app.get('/api/admin/audit', (_req, res) => res.json(db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 150').all()));
 app.use('/api', (_req, res) => res.status(404).json({ error: 'No encontramos esa información.' }));
 app.use((err, _req, res, _next) => {
   if (err instanceof z.ZodError) return res.status(400).json({ error: 'Revisa los datos del formulario.', details: err.issues.map(i => `${i.path.join('.')}: ${i.message}`) });
-  if (err instanceof multer.MulterError) return res.status(400).json({ error: 'Revisa la fotografía. El máximo es 6 MB y solo debes adjuntar el frente del DUI.' });
+  if (err instanceof multer.MulterError) return res.status(400).json({ error: 'Revisa el archivo. Solo puedes adjuntar una imagen de hasta 6 MB.' });
   if (err.message?.startsWith('UPLOAD:')) return res.status(400).json({ error: err.message.slice(7) });
+  if (err.message?.startsWith('VIDEO:')) return res.status(400).json({ error: err.message.slice(6) });
   // Do not log request bodies, filenames, DUI numbers or document contents.
   console.error('Request failed:', err.code || err.name);
   res.status(500).json({ error: 'No pudimos completar la operación. Inténtalo nuevamente.' });

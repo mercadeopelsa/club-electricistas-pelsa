@@ -92,6 +92,23 @@ test('scheduled promotions and hidden benefits are excluded from public response
   kpis=await(await request('/api/admin/kpis',{authenticated:true})).json(); assert.ok(kpis.promotions.find(p=>p.id===activePromotion.id).deleted_at); assert.equal(kpis.summary.promotionClicks,2);
 });
 
+test('upcoming events support images and approved embedded video providers',async()=>{
+  const now=Date.now();
+  const videos=[['YouTube','https://www.youtube.com/watch?v=dQw4w9WgXcQ','youtube'],['Instagram','https://www.instagram.com/reel/ABC_123/','instagram'],['Facebook','https://www.facebook.com/example/videos/123456789/','facebook'],['TikTok','https://www.tiktok.com/@example/video/7123456789012345678','tiktok']];
+  const ids=[];
+  for (const [title,video,provider] of videos) {
+    const f=new FormData(); for(const[k,v] of Object.entries({title:`Evento ${title}`,description:'Actividad para miembros del club',location:'PELSA San Salvador',starts_at:new Date(now+3600000).toISOString(),ends_at:new Date(now+7200000).toISOString(),registration_url:'https://example.test/registro',video_url:video,active:'true'})) f.set(k,v);
+    if(title==='YouTube') f.set('image',new Blob([image],{type:'image/png'}),'evento.png');
+    const response=await request('/api/admin/events',{method:'POST',authenticated:true,body:f}); assert.equal(response.status,200); ids.push((await response.json()).id);
+    assert.equal(db.prepare('SELECT video_provider FROM events WHERE id=?').get(ids.at(-1)).video_provider,provider);
+  }
+  const invalid=new FormData(); for(const[k,v] of Object.entries({title:'Evento inválido',description:'No debe guardarse',location:'PELSA',starts_at:new Date(now+3600000).toISOString(),ends_at:new Date(now+7200000).toISOString(),registration_url:'',video_url:'https://example.com/video/123',active:'true'})) invalid.set(k,v);
+  assert.equal((await request('/api/admin/events',{method:'POST',authenticated:true,body:invalid})).status,400);
+  const content=await(await request('/api/content')).json(); assert.equal(content.events.length,4); assert.deepEqual(new Set(content.events.map(event=>event.video_provider)),new Set(['youtube','instagram','facebook','tiktok']));
+  const first=content.events.find(event=>event.video_provider==='youtube'); assert.ok(first.image); assert.equal((await request(`/api/events/media/${first.image}`)).status,200); assert.equal((await request(`/api/admin/events/${first.id}/image`,{authenticated:true})).status,200);
+  assert.equal((await request(`/api/admin/events/${first.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).events.some(event=>event.id===first.id)); await assert.rejects(readFile(path.join(testDir,'events',first.image)));
+});
+
 test('logout invalidates the server-side session',async()=>{
   assert.equal((await request('/api/admin/logout',{method:'POST',authenticated:true})).status,200);
   assert.equal((await request('/api/admin/me',{authenticated:true})).status,401);
