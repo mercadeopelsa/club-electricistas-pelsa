@@ -49,6 +49,7 @@ function visibleContent() {
   const now = new Date().toISOString();
   return {
     benefits: db.prepare('SELECT * FROM benefits WHERE active=1 ORDER BY position,id').all(),
+    solutions: db.prepare('SELECT id,kind,title,description,icon,position FROM solutions WHERE active=1 ORDER BY position,id').all(),
     promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now),
     events: db.prepare('SELECT id,title,description,location,starts_at,ends_at,registration_url,image,video_embed,video_provider FROM events WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id').all(now)
   };
@@ -202,7 +203,7 @@ app.get('/api/admin/members/:id/qr', wrap(async (req, res) => {
   const png = await QRCode.toBuffer(url, { width: 1000, margin: 4, errorCorrectionLevel: 'M' });
   res.attachment(`${referral ? 'recomendacion' : 'perfil'}-${memberNumber(m.number)}.png`).type('png').send(png);
 }));
-app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all(), events: db.prepare('SELECT * FROM events WHERE deleted_at IS NULL ORDER BY starts_at,id').all() }));
+app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), solutions: db.prepare('SELECT * FROM solutions ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all(), events: db.prepare('SELECT * FROM events WHERE deleted_at IS NULL ORDER BY starts_at,id').all() }));
 app.get('/api/admin/kpis', (_req, res) => res.json({
   summary: {
     profileViews: db.prepare('SELECT COALESCE(SUM(profile_views),0) value FROM members').get().value,
@@ -222,6 +223,23 @@ app.put('/api/admin/benefits/:id', (req, res) => {
   const result = db.prepare('UPDATE benefits SET title=?,description=?,icon=?,position=?,active=? WHERE id=?').run(b.title, b.description, b.icon, b.position, +b.active, req.params.id);
   if (!result.changes) return res.sendStatus(404);
   audit(req.admin.email, 'benefit.updated', req.params.id); res.json({ ok: true });
+});
+const solutionSchema = z.object({ kind: z.enum(['service', 'product']), title: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(240), icon: z.enum(['package', 'wrench', 'zap', 'lightbulb', 'shield', 'cable']), position: z.coerce.number().int().min(0).max(100), active: z.boolean() });
+app.post('/api/admin/solutions', (req, res) => {
+  const item = solutionSchema.parse(req.body);
+  const result = db.prepare('INSERT INTO solutions (kind,title,description,icon,position,active) VALUES (?,?,?,?,?,?)').run(item.kind, item.title, item.description, item.icon, item.position, +item.active);
+  audit(req.admin.email, 'solution.created', result.lastInsertRowid); res.status(201).json({ id:Number(result.lastInsertRowid) });
+});
+app.put('/api/admin/solutions/:id', (req, res) => {
+  const item = solutionSchema.parse(req.body);
+  const result = db.prepare('UPDATE solutions SET kind=?,title=?,description=?,icon=?,position=?,active=? WHERE id=?').run(item.kind, item.title, item.description, item.icon, item.position, +item.active, req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  audit(req.admin.email, 'solution.updated', req.params.id); res.json({ ok:true });
+});
+app.delete('/api/admin/solutions/:id', (req, res) => {
+  const result = db.prepare('DELETE FROM solutions WHERE id=?').run(req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  audit(req.admin.email, 'solution.deleted', req.params.id); res.json({ ok:true });
 });
 const promotionSchema = z.object({ title: z.string().trim().min(3).max(100), description: z.string().trim().min(3).max(1500), starts_at: z.iso.datetime(), ends_at: z.iso.datetime(), active: z.enum(['true', 'false']).transform(v => v === 'true') }).refine(v => v.ends_at > v.starts_at, 'La fecha final debe ser posterior a la inicial.');
 async function savePromotion(req, res) {

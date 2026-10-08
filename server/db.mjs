@@ -16,6 +16,7 @@ db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=50
 db.exec(readFileSync(new URL('./migrations/001-initial.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/002-events.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/003-member-branch.sql', import.meta.url), 'utf8'));
+db.exec(readFileSync(new URL('./migrations/004-solutions.sql', import.meta.url), 'utf8'));
 function ensureColumn(table, column, definition) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

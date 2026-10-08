@@ -110,6 +110,17 @@ test('upcoming events support images and approved embedded video providers',asyn
   assert.equal((await request(`/api/admin/events/${first.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).events.some(event=>event.id===first.id)); await assert.rejects(readFile(path.join(testDir,'events',first.image)));
 });
 
+test('services and product categories are editable, ordered and publicly filtered',async()=>{
+  assert.equal((await request('/api/admin/solutions',{method:'POST',body:{kind:'service',title:'Sin acceso',description:'No debe guardarse',icon:'wrench',position:0,active:true}})).status,401);
+  const product=await(await request('/api/admin/solutions',{method:'POST',authenticated:true,body:{kind:'product',title:'Iluminación',description:'Categoría de productos para proyectos eléctricos.',icon:'lightbulb',position:2,active:true}})).json();
+  const service=await(await request('/api/admin/solutions',{method:'POST',authenticated:true,body:{kind:'service',title:'Asesoría técnica',description:'Acompañamiento para elegir soluciones.',icon:'wrench',position:1,active:true}})).json();
+  await request('/api/admin/solutions',{method:'POST',authenticated:true,body:{kind:'product',title:'Categoría oculta',description:'No debe aparecer públicamente.',icon:'package',position:0,active:false}});
+  let content=await(await request('/api/content')).json(); assert.deepEqual(content.solutions.map(item=>item.title),['Asesoría técnica','Iluminación']);
+  assert.equal((await request(`/api/admin/solutions/${product.id}`,{method:'PUT',authenticated:true,body:{kind:'product',title:'Iluminación y control',description:'Portafolio actualizado.',icon:'zap',position:0,active:true}})).status,200);
+  content=await(await request('/api/content')).json(); assert.equal(content.solutions[0].title,'Iluminación y control');
+  assert.equal((await request(`/api/admin/solutions/${service.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).solutions.some(item=>item.id===service.id));
+});
+
 test('logout invalidates the server-side session',async()=>{
   assert.equal((await request('/api/admin/logout',{method:'POST',authenticated:true})).status,200);
   assert.equal((await request('/api/admin/me',{authenticated:true})).status,401);
