@@ -31,6 +31,7 @@ test('Excel import approves every row, permits repeated DUI and is idempotent', 
   assert.equal(first.imported,3); assert.equal(first.duplicates,1); assert.equal(first.existing,0);
   const members = db.prepare('SELECT * FROM members ORDER BY number').all();
   assert.deepEqual(members.map(member => [member.number,member.status,member.front_file]),[[1,'approved',''],[2,'approved',''],[3,'approved','']]);
+  assert.ok(members.every(member => member.branch_preference === 'san_salvador'));
   assert.equal(decrypt(members[0].dui_encrypted).toString(),'012345678'); assert.equal(members[0].whatsapp,'50370000000'); assert.equal(members[0].token.length,48);
   assert.equal(decrypt(members[1].dui_encrypted).toString(),'012345678'); assert.notEqual(members[0].dui_hash,members[1].dui_hash);
   const report = await readFile(first.reportPath,'utf8'); assert.match(report,/https:\/\/club\.example\.test\/m\//);
@@ -38,4 +39,10 @@ test('Excel import approves every row, permits repeated DUI and is idempotent', 
   const second = await importMembersFromExcel(input);
   assert.equal(second.imported,0); assert.equal(second.existing,3); assert.equal(second.duplicates,1);
   assert.equal(db.prepare('SELECT COUNT(*) count FROM members').get().count,3);
+
+  const sanMiguelWorkbook = new ExcelJS.Workbook(); const sanMiguelSheet = sanMiguelWorkbook.addWorksheet('Miembros');
+  sanMiguelSheet.addRow(['NOMBRE','WHATSAPP','CORREO','DUI']); sanMiguelSheet.addRow(['Persona San Miguel',72222222,'miguel@example.test','987654321']);
+  const sanMiguelInput = path.join(testDir,'miembros-san-miguel.xlsx'); await sanMiguelWorkbook.xlsx.writeFile(sanMiguelInput);
+  const sanMiguelResult = await importMembersFromExcel(sanMiguelInput,{defaultBranch:'san_miguel'}); assert.equal(sanMiguelResult.imported,1);
+  assert.equal(db.prepare("SELECT branch_preference FROM members WHERE email='miguel@example.test'").get().branch_preference,'san_miguel');
 });

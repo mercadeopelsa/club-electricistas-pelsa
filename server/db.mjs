@@ -15,14 +15,17 @@ export const db = new DatabaseSync(path.join(dataDir, 'club.sqlite'));
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
 db.exec(readFileSync(new URL('./migrations/001-initial.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/002-events.sql', import.meta.url), 'utf8'));
+db.exec(readFileSync(new URL('./migrations/003-member-branch.sql', import.meta.url), 'utf8'));
 function ensureColumn(table, column, definition) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 ensureColumn('members', 'profile_views', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('members', 'import_key', 'TEXT');
+ensureColumn('members', 'branch_preference', "TEXT NOT NULL DEFAULT 'san_salvador'");
 ensureColumn('promotions', 'clicks', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('promotions', 'deleted_at', 'TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_members_import_key ON members(import_key) WHERE import_key IS NOT NULL;');
+db.prepare("UPDATE members SET branch_preference='san_salvador' WHERE branch_preference IS NULL OR branch_preference NOT IN ('san_salvador','san_miguel','ambas')").run();
 export function encrypt(data) {
   const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);

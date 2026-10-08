@@ -66,6 +66,7 @@ const registrationSchema = z.object({
   name: z.string().trim().min(3).max(120), email: z.email().max(254).transform(v => v.toLowerCase()),
   whatsapp: z.string().transform(v => v.replace(/[\s()+-]/g, '')).refine(v => /^503[267]\d{7}$/.test(v), 'Ingresa +503 seguido de un número válido de 8 dígitos.'),
   dui: z.string().transform(normalizeDui).refine(v => /^\d{9}$/.test(v), 'El DUI debe tener 9 dígitos.'),
+  branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']),
   referral: z.string().trim().max(12).optional().default(''),
   consent: z.literal('true'), website: z.string().max(0).optional().default('')
 });
@@ -87,7 +88,7 @@ app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ nam
   const frontFile = `${randomBytes(20).toString('hex')}.enc`;
   try {
     await writeFile(path.join(dataDir, 'documents', frontFile), encrypt(front), { mode: 0o600 });
-    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,referred_by,consent_at) VALUES (?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, '', referredBy, new Date().toISOString());
+    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,branch_preference,referred_by,consent_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, '', fields.branch_preference, referredBy, new Date().toISOString());
     res.status(201).json({ message: 'Solicitud recibida. Mercadeo revisará tus datos y te notificará por WhatsApp.' });
   } catch (err) {
     await Promise.allSettled([unlink(path.join(dataDir, 'documents', frontFile))]);
@@ -178,8 +179,8 @@ app.post('/api/admin/members/:id/review', (req, res) => {
   res.json(adminMember(db.prepare('SELECT * FROM members WHERE id=?').get(m.id)));
 });
 app.patch('/api/admin/members/:id', (req, res) => {
-  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.email().max(254), whatsapp: z.string().regex(/^503[267]\d{7}$/), show_email: z.boolean(), show_whatsapp: z.boolean() }).parse(req.body);
-  const result = db.prepare('UPDATE members SET name=?,email=?,whatsapp=?,show_email=?,show_whatsapp=? WHERE id=?').run(fields.name, fields.email, fields.whatsapp, +fields.show_email, +fields.show_whatsapp, req.params.id);
+  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.email().max(254), whatsapp: z.string().regex(/^503[267]\d{7}$/), branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']), show_email: z.boolean(), show_whatsapp: z.boolean() }).parse(req.body);
+  const result = db.prepare('UPDATE members SET name=?,email=?,whatsapp=?,branch_preference=?,show_email=?,show_whatsapp=? WHERE id=?').run(fields.name, fields.email, fields.whatsapp, fields.branch_preference, +fields.show_email, +fields.show_whatsapp, req.params.id);
   if (!result.changes) return res.sendStatus(404);
   audit(req.admin.email, 'member.updated', req.params.id); res.json({ ok: true });
 });

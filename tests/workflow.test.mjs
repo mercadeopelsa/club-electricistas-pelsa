@@ -15,7 +15,7 @@ let server, base, cookie;
 const image = await sharp({ create: { width: 80, height: 50, channels: 3, background: '#eecb00' } }).png().toBuffer();
 function form(dui = '12345678-9', extra = {}) {
   const f = new FormData();
-  for (const [k,v] of Object.entries({name:'Persona de prueba',email:'prueba@example.test',whatsapp:'50370000000',dui,consent:'true',...extra})) f.set(k,v);
+  for (const [k,v] of Object.entries({name:'Persona de prueba',email:'prueba@example.test',whatsapp:'50370000000',dui,branch_preference:'san_salvador',consent:'true',...extra})) f.set(k,v);
   f.set('front',new Blob([image],{type:'image/png'}),'front.png'); return f;
 }
 async function request(url, { method='GET', body, authenticated=false, origin='http://localhost:4173', redirect='follow' }={}) {
@@ -37,7 +37,7 @@ test('registration, approval, privacy, referrals and suspension are durable and 
   assert.equal((await request('/api/registrations',{method:'POST',body:form(),origin:'https://other.example'})).status,403);
   assert.equal((await request('/api/registrations',{method:'POST',body:form()})).status,201);
   assert.equal((await request('/api/registrations',{method:'POST',body:form('123456789')})).status,409);
-  let row=db.prepare('SELECT * FROM members LIMIT 1').get(); assert.equal(row.status,'pending'); assert.equal(row.number,null); assert.equal(row.token,null);
+  let row=db.prepare('SELECT * FROM members LIMIT 1').get(); assert.equal(row.status,'pending'); assert.equal(row.number,null); assert.equal(row.token,null); assert.equal(row.branch_preference,'san_salvador');
   assert.equal(row.back_file,'');
   assert.ok(!Buffer.from(row.dui_encrypted).includes(Buffer.from('123456789'))); assert.equal(decrypt(row.dui_encrypted).toString(),'123456789');
   const document=await readFile(path.join(testDir,'documents',row.front_file)); assert.notEqual(document[0],0xff); assert.ok(decrypt(document).length>0);
@@ -48,7 +48,8 @@ test('registration, approval, privacy, referrals and suspension are durable and 
   assert.equal((await request(`/api/admin/members/${row.id}/documents/back`,{authenticated:true})).status,404);
   assert.equal((await request(`/api/admin/members/${row.id}/qr`,{authenticated:true})).headers.get('content-type'),'image/png');
   assert.equal((await request(`/api/admin/members/${row.id}/qr?type=referral`,{authenticated:true})).status,200);
-  await request(`/api/admin/members/${row.id}`,{method:'PATCH',authenticated:true,body:{name:member.name,email:member.email,whatsapp:member.whatsapp,show_email:true,show_whatsapp:false}});
+  await request(`/api/admin/members/${row.id}`,{method:'PATCH',authenticated:true,body:{name:member.name,email:member.email,whatsapp:member.whatsapp,branch_preference:'ambas',show_email:true,show_whatsapp:false}});
+  assert.equal(db.prepare('SELECT branch_preference FROM members WHERE id=?').get(row.id).branch_preference,'ambas');
   const changed=await(await request(`/api/members/${member.token}`)).json(); assert.equal(changed.email,member.email); assert.equal(changed.whatsapp,null);
   await request(`/api/admin/members/${row.id}/review`,{method:'POST',authenticated:true,body:{status:'suspended'}}); assert.equal((await request(`/api/members/${member.token}`)).status,404);
   const reactivated=await(await request(`/api/admin/members/${row.id}/review`,{method:'POST',authenticated:true,body:{status:'approved'}})).json(); assert.equal(reactivated.number,member.number); assert.equal(reactivated.token,member.token);
