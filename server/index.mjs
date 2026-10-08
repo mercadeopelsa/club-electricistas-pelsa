@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { app } from './app.mjs';
+import { startCampaignWorker } from './campaigns.mjs';
 const production = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
 if (production) {
   app.use(express.static(path.resolve('dist')));
@@ -12,4 +13,6 @@ if (production) {
 }
 const port = Number(process.env.PORT || 4173);
 const server = app.listen(port, process.env.HOST || '127.0.0.1', () => console.log(`Club PELSA: ${process.env.APP_URL || `http://localhost:${port}`}`));
+startCampaignWorker();
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
+

@@ -9,6 +9,7 @@ import sharp from 'sharp';
 const testDir = await mkdtemp(path.join(os.tmpdir(), 'pelsa-test-'));
 process.env.DATA_DIR = testDir; process.env.DATA_KEY = randomBytes(32).toString('hex');
 process.env.APP_URL = 'http://localhost:4173'; process.env.COOKIE_SECURE = 'false';
+process.env.MESSAGING_MODE = 'test';
 const { db, passwordHash, decrypt } = await import('../server/db.mjs');
 const { app } = await import('../server/app.mjs');
 let server, base, cookie;
@@ -124,11 +125,13 @@ test('services and product categories are editable, ordered and publicly filtere
 
 test('campaign drafts segment only members with communication consent',async()=>{
   assert.equal((await request('/api/admin/campaigns')).status,401);
-  let dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); assert.ok(dashboard.audiences.all>=1); assert.equal(dashboard.config.mode,'pending_provider');
-  const created=await(await request('/api/admin/campaigns',{method:'POST',authenticated:true,body:{name:'Evento de prueba',channel:'whatsapp',body:'Te esperamos en nuestro próximo evento.',template_sid:'',audience_branch:'all',scheduled_at:null}})).json(); assert.ok(created.id);
+  let dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); assert.ok(dashboard.audiences.all>=1); assert.equal(dashboard.config.mode,'test'); assert.equal(dashboard.config.whatsappReady,true);
+  const created=await(await request('/api/admin/campaigns',{method:'POST',authenticated:true,body:{name:'Evento de prueba',channel:'whatsapp',body:'Te esperamos en nuestro próximo evento.',template_sid:`HX${'a'.repeat(32)}`,audience_branch:'all',scheduled_at:null}})).json(); assert.ok(created.id);
   dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); assert.equal(dashboard.campaigns[0].name,'Evento de prueba');
-  assert.equal((await request(`/api/admin/campaigns/${created.id}/launch`,{method:'POST',authenticated:true})).status,409);
-  assert.equal((await request(`/api/admin/campaigns/${created.id}`,{method:'DELETE',authenticated:true})).status,200);
+  const launched=await request(`/api/admin/campaigns/${created.id}/launch`,{method:'POST',authenticated:true}); assert.equal(launched.status,200);
+  await new Promise(resolve=>setTimeout(resolve,50));
+  dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); const completed=dashboard.campaigns.find(item=>item.id===created.id); assert.equal(completed.status,'completed'); assert.equal(completed.sent_count,completed.recipient_count); assert.ok(completed.sent_count>=1);
+  assert.equal((await request(`/api/admin/campaigns/${created.id}`,{method:'DELETE',authenticated:true})).status,404);
 });
 
 test('admins can permanently remove a profile without breaking referrals',async()=>{
