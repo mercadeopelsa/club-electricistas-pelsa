@@ -40,9 +40,14 @@ test('Excel import approves every row, permits repeated DUI and is idempotent', 
   assert.equal(second.imported,0); assert.equal(second.existing,3); assert.equal(second.duplicates,1);
   assert.equal(db.prepare('SELECT COUNT(*) count FROM members').get().count,3);
 
-  const sanMiguelWorkbook = new ExcelJS.Workbook(); const sanMiguelSheet = sanMiguelWorkbook.addWorksheet('Miembros');
-  sanMiguelSheet.addRow(['NOMBRE','WHATSAPP','CORREO','DUI']); sanMiguelSheet.addRow(['Persona San Miguel',72222222,'miguel@example.test','987654321']);
+  const sanMiguelWorkbook = new ExcelJS.Workbook(); const sanMiguelSheet = sanMiguelWorkbook.addWorksheet('Respuestas de formulario 1');
+  sanMiguelSheet.addRow(['Marca temporal','Nombre','Whatsapp','Correo','Sube una fotografía de tu DUI (frente y reverso)','DUI']);
+  sanMiguelSheet.addRow([new Date(),'Persona San Miguel',72222222,'miguel@example.test','https://drive.example.test/1','987654321']);
+  sanMiguelSheet.addRow([new Date(),'Persona San Miguel duplicada',73333333,'','','987654321']);
+  sanMiguelSheet.addRow([new Date(),'Persona sin DUI',74444444,'','','']);
   const sanMiguelInput = path.join(testDir,'miembros-san-miguel.xlsx'); await sanMiguelWorkbook.xlsx.writeFile(sanMiguelInput);
-  const sanMiguelResult = await importMembersFromExcel(sanMiguelInput,{defaultBranch:'san_miguel'}); assert.equal(sanMiguelResult.imported,1);
-  assert.equal(db.prepare("SELECT branch_preference FROM members WHERE email='miguel@example.test'").get().branch_preference,'san_miguel');
+  const sanMiguelResult = await importMembersFromExcel(sanMiguelInput,{defaultBranch:'san_miguel'}); assert.equal(sanMiguelResult.imported,3); assert.equal(sanMiguelResult.duplicates,1);
+  const sanMiguelMembers = db.prepare("SELECT * FROM members WHERE branch_preference='san_miguel' ORDER BY number").all();
+  assert.equal(sanMiguelMembers.length,3); assert.ok(sanMiguelMembers.every(member => member.status === 'approved'));
+  assert.equal(sanMiguelMembers[1].email,''); assert.equal(decrypt(sanMiguelMembers[2].dui_encrypted).toString(),'');
 });

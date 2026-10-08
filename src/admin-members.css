@@ -1,0 +1,4 @@
+.duplicate-badge{display:flex!important;align-items:center;gap:5px;width:max-content;margin-top:7px!important;padding:4px 7px;border-radius:5px;background:#f6d20b17;color:#e1ca51!important;font-size:.64rem!important;font-weight:650}
+.duplicate-warning{display:flex;align-items:flex-start;gap:12px;margin:0 0 22px;padding:15px 17px;border:1px solid #7a6d24;border-radius:8px;background:#f6d20b0d;color:#e5cf58}
+.duplicate-warning svg{flex:0 0 auto;margin-top:2px}.duplicate-warning strong{font-size:.82rem}.duplicate-warning p{margin:5px 0 0;color:#a9a06d;font-size:.73rem;line-height:1.5}
+.delete-member-zone{border:1px solid #713b33!important;border-radius:9px;padding:19px!important;background:#3a1e1a2e}.delete-member-zone h3{color:#efb0a5}.delete-member-zone p{margin-bottom:15px;color:#b6948e}

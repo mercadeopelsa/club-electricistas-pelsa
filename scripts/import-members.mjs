@@ -6,8 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { audit, dataDir, db, duiHash, encrypt } from '../server/db.mjs';
 
 const appUrl = new URL(process.env.APP_URL || 'http://localhost:4173').origin;
-const expectedHeaders = ['NOMBRE', 'WHATSAPP', 'CORREO', 'DUI'];
 const cleanText = value => String(value ?? '').trim().replace(/\s+/g, ' ');
+const normalizeHeader = value => cleanText(value).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const normalizeBranch = value => {
   const clean = cleanText(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('_', ' ');
   if (['san salvador', 'ss'].includes(clean)) return 'san_salvador';
@@ -28,26 +28,31 @@ export async function importMembersFromExcel(filePath, { defaultBranch = 'san_sa
   await workbook.xlsx.readFile(path.resolve(filePath));
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error('El archivo no contiene ninguna hoja.');
-  const headers = expectedHeaders.map((_, index) => cleanText(sheet.getCell(1, index + 1).text).toUpperCase());
-  if (headers.some((header, index) => header !== expectedHeaders[index])) throw new Error(`La primera fila debe contener: ${expectedHeaders.join(', ')}.`);
-  const optionalHeader = cleanText(sheet.getCell(1, 5).text).toUpperCase();
-  if (optionalHeader && optionalHeader !== 'SUCURSAL') throw new Error('La quinta columna opcional debe llamarse SUCURSAL.');
+  const headers = Array.from({ length:sheet.columnCount }, (_, index) => normalizeHeader(sheet.getCell(1, index + 1).text));
+  const column = {
+    name: headers.findIndex(header => header === 'NOMBRE') + 1,
+    whatsapp: headers.findIndex(header => header.includes('WHATSAPP')) + 1,
+    email: headers.findIndex(header => header === 'CORREO' || header.includes('CORREO ELECTRONICO')) + 1,
+    dui: headers.findIndex(header => header === 'DUI' || header === 'NUMERO DE DUI') + 1,
+    branch: headers.findIndex(header => header === 'SUCURSAL' || header.includes('SUCURSAL QUE VISITA')) + 1
+  };
+  if (!column.name || !column.whatsapp || !column.email || !column.dui) throw new Error('La hoja debe contener columnas de Nombre, WhatsApp, Correo y DUI. Se aceptan exportaciones directas de Google Forms.');
 
   const candidates = []; const issues = []; const duplicateRows = []; const seenDui = new Map(); const seenRecord = new Map();
   for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
-    const name = cleanText(row.getCell(1).text);
-    let whatsapp = cellDigits(row.getCell(2));
-    const email = cleanText(row.getCell(3).text).toLowerCase();
-    const dui = cellDigits(row.getCell(4));
-    const branch = optionalHeader ? normalizeBranch(row.getCell(5).text) : defaultBranch;
+    const name = cleanText(row.getCell(column.name).text);
+    let whatsapp = cellDigits(row.getCell(column.whatsapp));
+    const email = cleanText(row.getCell(column.email).text).toLowerCase();
+    const dui = cellDigits(row.getCell(column.dui));
+    const branch = column.branch ? normalizeBranch(row.getCell(column.branch).text) : defaultBranch;
     if (![name, whatsapp, email, dui].some(Boolean)) continue;
     if (whatsapp.length === 8) whatsapp = `503${whatsapp}`;
     const rowIssues = [];
     if (name.length < 3 || name.length > 120) rowIssues.push('nombre inválido');
     if (!/^503[267]\d{7}$/.test(whatsapp)) rowIssues.push('WhatsApp inválido');
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) rowIssues.push('correo inválido');
-    if (!/^\d{9}$/.test(dui)) rowIssues.push('DUI inválido');
+    if (email.length > 254) rowIssues.push('correo demasiado largo');
+    if (dui && !/^\d{9}$/.test(dui)) rowIssues.push('DUI inválido');
     if (!branch) rowIssues.push('sucursal inválida');
     if (rowIssues.length) { issues.push(`Fila ${rowNumber}: ${rowIssues.join(', ')}`); continue; }
     if (seenDui.has(dui)) duplicateRows.push({ row: rowNumber, keptRow: seenDui.get(dui) });
@@ -72,13 +77,13 @@ export async function importMembersFromExcel(filePath, { defaultBranch = 'san_sa
     for (const member of candidates) {
       const alreadyImported = findImported.get(member.importKey);
       if (alreadyImported) { updateImportedBranch.run(member.branch, alreadyImported.id); existing.push({ rowNumber:member.rowNumber, number:alreadyImported.number == null ? '' : String(alreadyImported.number).padStart(6, '0') }); continue; }
-      const baseHash = duiHash(member.dui); const found = findMember.get(baseHash);
+      const baseHash = member.dui ? duiHash(member.dui) : null; const found = baseHash ? findMember.get(baseHash) : null;
       if (found && found.import_key == null && found.name === member.name && found.email === member.email && found.whatsapp === member.whatsapp) {
         claimExisting.run(member.importKey, member.branch, found.id);
         existing.push({ rowNumber:member.rowNumber, number:found.number == null ? '' : String(found.number).padStart(6, '0') });
         continue;
       }
-      const hash = found ? duiHash(`legacy-excel-duplicate-v2|${member.importKey}`) : baseHash;
+      const hash = found || !baseHash ? duiHash(`legacy-excel-duplicate-v2|${member.importKey}`) : baseHash;
       const number = nextNumber.get().value; const token = randomBytes(24).toString('hex'); const now = new Date().toISOString();
       const result = insert.run(member.name, member.email, member.whatsapp, hash, encrypt(Buffer.from(member.dui)), '', '', member.branch, 'approved', number, token, 'Importado desde Excel como miembro aprobado; los DUI repetidos fueron autorizados para el padrón inicial.', now, 'legacy-excel-import-2026-10', now, member.importKey);
       audit('system:excel-import', 'member.imported', result.lastInsertRowid);

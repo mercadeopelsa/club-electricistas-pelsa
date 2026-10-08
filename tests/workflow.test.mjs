@@ -122,6 +122,15 @@ test('services and product categories are editable, ordered and publicly filtere
   assert.equal((await request(`/api/admin/solutions/${service.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).solutions.some(item=>item.id===service.id));
 });
 
+test('admins can permanently remove a profile without breaking referrals',async()=>{
+  const member=db.prepare("SELECT * FROM members WHERE status='approved' ORDER BY id LIMIT 1").get(); assert.ok(member);
+  const referred=db.prepare('SELECT id FROM members WHERE referred_by=? LIMIT 1').get(member.id); assert.ok(referred);
+  assert.equal((await request(`/api/admin/members/${member.id}`,{method:'DELETE',authenticated:true})).status,200);
+  assert.equal((await request(`/api/members/${member.token}`)).status,404);
+  assert.equal(db.prepare('SELECT referred_by FROM members WHERE id=?').get(referred.id).referred_by,null);
+  assert.ok(db.prepare("SELECT id FROM audit WHERE action='member.deleted'").get());
+});
+
 test('logout invalidates the server-side session',async()=>{
   assert.equal((await request('/api/admin/logout',{method:'POST',authenticated:true})).status,200);
   assert.equal((await request('/api/admin/me',{authenticated:true})).status,401);

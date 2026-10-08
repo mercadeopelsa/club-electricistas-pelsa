@@ -158,7 +158,15 @@ app.post('/api/admin/logout', (req, res) => {
   db.prepare('DELETE FROM sessions WHERE token=?').run(req.session);
   res.clearCookie(cookieName, cookieOptions).json({ ok: true });
 });
-app.get('/api/admin/members', (_req, res) => res.json(db.prepare('SELECT * FROM members ORDER BY created_at DESC,id DESC').all().map(adminMember)));
+app.get('/api/admin/members', (_req, res) => {
+  const members = db.prepare('SELECT * FROM members ORDER BY created_at DESC,id DESC').all().map(adminMember);
+  const duiCounts = members.reduce((counts, member) => {
+    const dui = normalizeDui(member.dui);
+    if (dui) counts.set(dui, (counts.get(dui) || 0) + 1);
+    return counts;
+  }, new Map());
+  res.json(members.map(member => ({ ...member, duplicateCount:duiCounts.get(normalizeDui(member.dui)) || 0 })));
+});
 app.post('/api/admin/members/:id/review', (req, res) => {
   const fields = z.object({ status: z.enum(['approved', 'rejected', 'suspended', 'pending']), note: z.string().trim().max(500).default('') }).parse(req.body);
   const m = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
@@ -180,11 +188,29 @@ app.post('/api/admin/members/:id/review', (req, res) => {
   res.json(adminMember(db.prepare('SELECT * FROM members WHERE id=?').get(m.id)));
 });
 app.patch('/api/admin/members/:id', (req, res) => {
-  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.email().max(254), whatsapp: z.string().regex(/^503[267]\d{7}$/), branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']), show_email: z.boolean(), show_whatsapp: z.boolean() }).parse(req.body);
+  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.union([z.literal(''), z.email().max(254)]), whatsapp: z.string().regex(/^503[267]\d{7}$/), branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']), show_email: z.boolean(), show_whatsapp: z.boolean() }).parse(req.body);
   const result = db.prepare('UPDATE members SET name=?,email=?,whatsapp=?,branch_preference=?,show_email=?,show_whatsapp=? WHERE id=?').run(fields.name, fields.email, fields.whatsapp, fields.branch_preference, +fields.show_email, +fields.show_whatsapp, req.params.id);
   if (!result.changes) return res.sendStatus(404);
   audit(req.admin.email, 'member.updated', req.params.id); res.json({ ok: true });
 });
+app.delete('/api/admin/members/:id', wrap(async (req, res) => {
+  const member = db.prepare('SELECT id,name,number,front_file,dui_hash,dui_encrypted FROM members WHERE id=?').get(req.params.id);
+  if (!member) return res.sendStatus(404);
+  const deletedDui = decrypt(member.dui_encrypted).toString();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE members SET referred_by=NULL WHERE referred_by=?').run(member.id);
+    db.prepare('DELETE FROM members WHERE id=?').run(member.id);
+    if (deletedDui && member.dui_hash === duiHash(deletedDui)) {
+      const survivor = db.prepare('SELECT id,dui_encrypted FROM members').all().find(candidate => decrypt(candidate.dui_encrypted).toString() === deletedDui);
+      if (survivor) db.prepare('UPDATE members SET dui_hash=? WHERE id=?').run(duiHash(deletedDui), survivor.id);
+    }
+    audit(req.admin.email, 'member.deleted', `${member.id}:${member.number || 'sin-numero'}`);
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  if (member.front_file) await unlink(path.join(dataDir, 'documents', member.front_file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  res.json({ ok:true });
+}));
 app.get('/api/admin/members/:id/documents/:side', wrap(async (req, res) => {
   if (req.params.side !== 'front') return res.sendStatus(404);
   const m = db.prepare('SELECT front_file FROM members WHERE id=?').get(req.params.id);
