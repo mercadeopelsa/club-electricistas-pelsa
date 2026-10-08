@@ -63,3 +63,32 @@ if (!db.prepare('SELECT id FROM benefits LIMIT 1').get() && !db.prepare("SELECT 
   ].forEach((item, index) => insert.run(...item, index));
   db.prepare("INSERT INTO settings (key,value) VALUES ('seeded','1')").run();
 }
+
+if (!db.prepare("SELECT value FROM settings WHERE key='solutions_seeded_v1'").get()) {
+  if (!db.prepare('SELECT id FROM solutions LIMIT 1').get()) {
+    const insert = db.prepare('INSERT INTO solutions (kind,title,description,icon,position,active) VALUES (?,?,?,?,?,1)');
+    [
+      ['product','Transformadores','Equipos de distribución y potencia para proyectos residenciales, comerciales e industriales.','zap',0],
+      ['product','Tableros eléctricos','Soluciones de distribución, protección, control y modernización de instalaciones.','shield',1],
+      ['product','Iluminación','Opciones para iluminación residencial, comercial, industrial y alumbrado público.','lightbulb',2],
+      ['product','Conductores eléctricos','Cables y conductores para energía, control y aplicaciones especiales.','cable',3],
+      ['product','Canalización','Sistemas para conducir, ordenar y proteger el cableado de cada instalación.','cable',4],
+      ['product','Placas y tomas','Dispositivos y accesorios para conexión, control y terminación eléctrica.','package',5],
+      ['product','Datos y telefonía','Conectividad, cableado estructurado y soluciones para redes de comunicación.','cable',6],
+      ['product','Postes','Soluciones para infraestructura eléctrica, distribución y alumbrado.','package',7],
+      ['product','Herrajes y aisladores','Componentes para montaje, soporte y aislamiento de redes eléctricas.','wrench',8],
+      ['product','Pararrayos y redes de tierra','Protección contra descargas atmosféricas y sistemas de puesta a tierra.','shield',9],
+      ['product','Cámaras termográficas','Diagnóstico térmico para mantenimiento y detección preventiva de fallas.','shield',10],
+      ['service','Subestaciones eléctricas','Diseño, construcción, suministro y mantenimiento de subestaciones.','zap',20],
+      ['service','Tableros y arrancadores','Mantenimiento, diagnóstico y modernización de tableros de distribución y control.','wrench',21],
+      ['service','Mediciones y alquiler de equipos','Mediciones eléctricas especializadas y equipos para diagnóstico técnico.','wrench',22],
+      ['service','Calidad y eficiencia energética','Estudios, bancos de capacitores y filtros para reducir armónicos y mejorar el desempeño.','lightbulb',23],
+      ['service','Protección atmosférica','Diseño, instalación y mantenimiento de pararrayos y redes de tierra.','shield',24],
+      ['service','Automatización y SCADA','Control de procesos, automatización de líneas y supervisión de sistemas eléctricos.','zap',25],
+      ['service','Cálculos eléctricos y lumínicos','Diseño y especificación para instalaciones y espacios interiores o exteriores.','lightbulb',26],
+      ['service','Interconexión fotovoltaica','Asesoría técnica para integrar sistemas solares a la red eléctrica.','zap',27],
+      ['service','Ensambles personalizados','Fabricación y configuración de soluciones eléctricas según cada proyecto.','wrench',28]
+    ].forEach(item => insert.run(...item));
+  }
+  db.prepare("INSERT INTO settings (key,value) VALUES ('solutions_seeded_v1','1')").run();
+}

@@ -111,6 +111,7 @@ test('upcoming events support images and approved embedded video providers',asyn
 });
 
 test('services and product categories are editable, ordered and publicly filtered',async()=>{
+  assert.equal(db.prepare('SELECT COUNT(*) count FROM solutions').get().count,20); db.prepare('DELETE FROM solutions').run();
   assert.equal((await request('/api/admin/solutions',{method:'POST',body:{kind:'service',title:'Sin acceso',description:'No debe guardarse',icon:'wrench',position:0,active:true}})).status,401);
   const product=await(await request('/api/admin/solutions',{method:'POST',authenticated:true,body:{kind:'product',title:'Iluminación',description:'Categoría de productos para proyectos eléctricos.',icon:'lightbulb',position:2,active:true}})).json();
   const service=await(await request('/api/admin/solutions',{method:'POST',authenticated:true,body:{kind:'service',title:'Asesoría técnica',description:'Acompañamiento para elegir soluciones.',icon:'wrench',position:1,active:true}})).json();
