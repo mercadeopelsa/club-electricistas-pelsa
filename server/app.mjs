@@ -8,7 +8,8 @@ import { z } from 'zod';
 import { randomBytes, createHash } from 'node:crypto';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { db, dataDir, encrypt, decrypt, duiHash, normalizeDui, passwordMatches, passwordHash, audit } from './db.mjs';
+import { db, dataDir, encrypt, decrypt, duiHash, normalizeDui, passwordMatches, passwordHash, audit, claimMemberNumber, releaseMemberNumber } from './db.mjs';
+import { campaignRouter } from './campaigns.mjs';
 
 export const app = express();
 const production = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
@@ -69,7 +70,7 @@ const registrationSchema = z.object({
   dui: z.string().transform(normalizeDui).refine(v => /^\d{9}$/.test(v), 'El DUI debe tener 9 dígitos.'),
   branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']),
   referral: z.string().trim().max(12).optional().default(''),
-  consent: z.literal('true'), website: z.string().max(0).optional().default('')
+  consent: z.literal('true'), marketing_opt_in: z.literal('true').optional(), website: z.string().max(0).optional().default('')
 });
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/content', (_req, res) => res.json(visibleContent()));
@@ -89,7 +90,8 @@ app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ nam
   const frontFile = `${randomBytes(20).toString('hex')}.enc`;
   try {
     await writeFile(path.join(dataDir, 'documents', frontFile), encrypt(front), { mode: 0o600 });
-    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,branch_preference,referred_by,consent_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, '', fields.branch_preference, referredBy, new Date().toISOString());
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,branch_preference,referred_by,consent_at,marketing_opt_in,marketing_opt_in_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(fields.name, fields.email, fields.whatsapp, h, encrypt(Buffer.from(fields.dui)), frontFile, '', fields.branch_preference, referredBy, now, fields.marketing_opt_in ? 1 : 0, fields.marketing_opt_in ? now : null);
     res.status(201).json({ message: 'Solicitud recibida. Mercadeo revisará tus datos y te notificará por WhatsApp.' });
   } catch (err) {
     await Promise.allSettled([unlink(path.join(dataDir, 'documents', frontFile))]);
@@ -153,6 +155,7 @@ app.post('/api/login', limited(10, 15 * 60 * 1000), wrap(async (req, res) => {
   res.cookie(cookieName, token, { ...cookieOptions, maxAge: 8 * 60 * 60 * 1000 }).json({ id: admin.id, name: admin.name, email: admin.email });
 }));
 app.use('/api/admin', auth);
+app.use('/api/admin/campaigns', campaignRouter);
 app.get('/api/admin/me', (req, res) => res.json(req.admin));
 app.post('/api/admin/logout', (req, res) => {
   db.prepare('DELETE FROM sessions WHERE token=?').run(req.session);
@@ -178,7 +181,7 @@ app.post('/api/admin/members/:id/review', (req, res) => {
   try {
     let number = m.number; let token = m.token;
     if (fields.status === 'approved' && !number) {
-      number = db.prepare("UPDATE counters SET value=value+1 WHERE name='member' RETURNING value").get().value;
+      number = claimMemberNumber();
       token = randomBytes(24).toString('hex');
     }
     db.prepare('UPDATE members SET status=?,number=?,token=?,review_note=?,reviewed_by=?,approved_at=CASE WHEN ?=\'approved\' THEN COALESCE(approved_at,?) ELSE approved_at END WHERE id=?').run(fields.status, number, token, fields.note, req.admin.id, fields.status, new Date().toISOString(), m.id);
@@ -188,8 +191,8 @@ app.post('/api/admin/members/:id/review', (req, res) => {
   res.json(adminMember(db.prepare('SELECT * FROM members WHERE id=?').get(m.id)));
 });
 app.patch('/api/admin/members/:id', (req, res) => {
-  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.union([z.literal(''), z.email().max(254)]), whatsapp: z.string().regex(/^503[267]\d{7}$/), branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']), show_email: z.boolean(), show_whatsapp: z.boolean() }).parse(req.body);
-  const result = db.prepare('UPDATE members SET name=?,email=?,whatsapp=?,branch_preference=?,show_email=?,show_whatsapp=? WHERE id=?').run(fields.name, fields.email, fields.whatsapp, fields.branch_preference, +fields.show_email, +fields.show_whatsapp, req.params.id);
+  const fields = z.object({ name: z.string().trim().min(3).max(120), email: z.union([z.literal(''), z.email().max(254)]), whatsapp: z.string().regex(/^503[267]\d{7}$/), branch_preference: z.enum(['san_salvador', 'san_miguel', 'ambas']), show_email: z.boolean(), show_whatsapp: z.boolean(), marketing_opt_in: z.boolean() }).parse(req.body);
+  const result = db.prepare('UPDATE members SET name=?,email=?,whatsapp=?,branch_preference=?,show_email=?,show_whatsapp=?,marketing_opt_in=?,marketing_opt_in_at=CASE WHEN ?=1 THEN COALESCE(marketing_opt_in_at,?) ELSE NULL END WHERE id=?').run(fields.name, fields.email, fields.whatsapp, fields.branch_preference, +fields.show_email, +fields.show_whatsapp, +fields.marketing_opt_in, +fields.marketing_opt_in, new Date().toISOString(), req.params.id);
   if (!result.changes) return res.sendStatus(404);
   audit(req.admin.email, 'member.updated', req.params.id); res.json({ ok: true });
 });
@@ -201,6 +204,7 @@ app.delete('/api/admin/members/:id', wrap(async (req, res) => {
   try {
     db.prepare('UPDATE members SET referred_by=NULL WHERE referred_by=?').run(member.id);
     db.prepare('DELETE FROM members WHERE id=?').run(member.id);
+    releaseMemberNumber(member.number);
     if (deletedDui && member.dui_hash === duiHash(deletedDui)) {
       const survivor = db.prepare('SELECT id,dui_encrypted FROM members').all().find(candidate => decrypt(candidate.dui_encrypted).toString() === deletedDui);
       if (survivor) db.prepare('UPDATE members SET dui_hash=? WHERE id=?').run(duiHash(deletedDui), survivor.id);

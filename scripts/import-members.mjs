@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { audit, dataDir, db, duiHash, encrypt } from '../server/db.mjs';
+import { audit, claimMemberNumber, dataDir, db, duiHash, encrypt } from '../server/db.mjs';
 
 const appUrl = new URL(process.env.APP_URL || 'http://localhost:4173').origin;
 const cleanText = value => String(value ?? '').trim().replace(/\s+/g, ' ');
@@ -72,7 +72,6 @@ export async function importMembersFromExcel(filePath, { defaultBranch = 'san_sa
     const updateImportedBranch = db.prepare('UPDATE members SET branch_preference=? WHERE id=?');
     const findMember = db.prepare('SELECT id,number,name,email,whatsapp,import_key FROM members WHERE dui_hash=?');
     const claimExisting = db.prepare('UPDATE members SET import_key=?,branch_preference=? WHERE id=? AND import_key IS NULL');
-    const nextNumber = db.prepare("UPDATE counters SET value=value+1 WHERE name='member' RETURNING value");
     const insert = db.prepare("INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,branch_preference,status,number,token,review_note,consent_at,consent_version,approved_at,import_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     for (const member of candidates) {
       const alreadyImported = findImported.get(member.importKey);
@@ -84,7 +83,7 @@ export async function importMembersFromExcel(filePath, { defaultBranch = 'san_sa
         continue;
       }
       const hash = found || !baseHash ? duiHash(`legacy-excel-duplicate-v2|${member.importKey}`) : baseHash;
-      const number = nextNumber.get().value; const token = randomBytes(24).toString('hex'); const now = new Date().toISOString();
+      const number = claimMemberNumber(); const token = randomBytes(24).toString('hex'); const now = new Date().toISOString();
       const result = insert.run(member.name, member.email, member.whatsapp, hash, encrypt(Buffer.from(member.dui)), '', '', member.branch, 'approved', number, token, 'Importado desde Excel como miembro aprobado; los DUI repetidos fueron autorizados para el padrón inicial.', now, 'legacy-excel-import-2026-10', now, member.importKey);
       audit('system:excel-import', 'member.imported', result.lastInsertRowid);
       imported.push({ name:member.name, number:String(number).padStart(6, '0'), profileUrl:`${appUrl}/m/${token}` });

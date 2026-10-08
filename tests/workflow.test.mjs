@@ -48,7 +48,7 @@ test('registration, approval, privacy, referrals and suspension are durable and 
   assert.equal((await request(`/api/admin/members/${row.id}/documents/back`,{authenticated:true})).status,404);
   assert.equal((await request(`/api/admin/members/${row.id}/qr`,{authenticated:true})).headers.get('content-type'),'image/png');
   assert.equal((await request(`/api/admin/members/${row.id}/qr?type=referral`,{authenticated:true})).status,200);
-  await request(`/api/admin/members/${row.id}`,{method:'PATCH',authenticated:true,body:{name:member.name,email:member.email,whatsapp:member.whatsapp,branch_preference:'ambas',show_email:true,show_whatsapp:false}});
+  await request(`/api/admin/members/${row.id}`,{method:'PATCH',authenticated:true,body:{name:member.name,email:member.email,whatsapp:member.whatsapp,branch_preference:'ambas',show_email:true,show_whatsapp:false,marketing_opt_in:true}});
   assert.equal(db.prepare('SELECT branch_preference FROM members WHERE id=?').get(row.id).branch_preference,'ambas');
   const changed=await(await request(`/api/members/${member.token}`)).json(); assert.equal(changed.email,member.email); assert.equal(changed.whatsapp,null);
   await request(`/api/admin/members/${row.id}/review`,{method:'POST',authenticated:true,body:{status:'suspended'}}); assert.equal((await request(`/api/members/${member.token}`)).status,404);
@@ -122,6 +122,15 @@ test('services and product categories are editable, ordered and publicly filtere
   assert.equal((await request(`/api/admin/solutions/${service.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).solutions.some(item=>item.id===service.id));
 });
 
+test('campaign drafts segment only members with communication consent',async()=>{
+  assert.equal((await request('/api/admin/campaigns')).status,401);
+  let dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); assert.ok(dashboard.audiences.all>=1); assert.equal(dashboard.config.mode,'pending_provider');
+  const created=await(await request('/api/admin/campaigns',{method:'POST',authenticated:true,body:{name:'Evento de prueba',channel:'whatsapp',body:'Te esperamos en nuestro próximo evento.',template_sid:'',audience_branch:'all',scheduled_at:null}})).json(); assert.ok(created.id);
+  dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); assert.equal(dashboard.campaigns[0].name,'Evento de prueba');
+  assert.equal((await request(`/api/admin/campaigns/${created.id}/launch`,{method:'POST',authenticated:true})).status,409);
+  assert.equal((await request(`/api/admin/campaigns/${created.id}`,{method:'DELETE',authenticated:true})).status,200);
+});
+
 test('admins can permanently remove a profile without breaking referrals',async()=>{
   const member=db.prepare("SELECT * FROM members WHERE status='approved' ORDER BY id LIMIT 1").get(); assert.ok(member);
   const referred=db.prepare('SELECT id FROM members WHERE referred_by=? LIMIT 1').get(member.id); assert.ok(referred);
@@ -129,6 +138,9 @@ test('admins can permanently remove a profile without breaking referrals',async(
   assert.equal((await request(`/api/members/${member.token}`)).status,404);
   assert.equal(db.prepare('SELECT referred_by FROM members WHERE id=?').get(referred.id).referred_by,null);
   assert.ok(db.prepare("SELECT id FROM audit WHERE action='member.deleted'").get());
+  assert.equal((await request('/api/registrations',{method:'POST',body:form('44444444-4')})).status,201);
+  const replacement=db.prepare("SELECT * FROM members WHERE dui_hash!=? AND number IS NULL ORDER BY id DESC LIMIT 1").get(member.dui_hash); assert.ok(replacement);
+  const approved=await(await request(`/api/admin/members/${replacement.id}/review`,{method:'POST',authenticated:true,body:{status:'approved'}})).json(); assert.equal(approved.number,String(member.number).padStart(6,'0'));
 });
 
 test('logout invalidates the server-side session',async()=>{

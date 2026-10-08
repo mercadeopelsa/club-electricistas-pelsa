@@ -17,12 +17,15 @@ db.exec(readFileSync(new URL('./migrations/001-initial.sql', import.meta.url), '
 db.exec(readFileSync(new URL('./migrations/002-events.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/003-member-branch.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/004-solutions.sql', import.meta.url), 'utf8'));
+db.exec(readFileSync(new URL('./migrations/005-campaigns.sql', import.meta.url), 'utf8'));
 function ensureColumn(table, column, definition) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 ensureColumn('members', 'profile_views', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('members', 'import_key', 'TEXT');
 ensureColumn('members', 'branch_preference', "TEXT NOT NULL DEFAULT 'san_salvador'");
+ensureColumn('members', 'marketing_opt_in', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('members', 'marketing_opt_in_at', 'TEXT');
 ensureColumn('promotions', 'clicks', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('promotions', 'deleted_at', 'TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_members_import_key ON members(import_key) WHERE import_key IS NOT NULL;');
@@ -51,6 +54,14 @@ export async function passwordMatches(value, stored) {
 }
 export function audit(actor, action, target = '') {
   db.prepare('INSERT INTO audit (actor,action,target) VALUES (?,?,?)').run(actor, action, String(target));
+}
+export function claimMemberNumber() {
+  const available = db.prepare('SELECT number FROM available_member_numbers ORDER BY number LIMIT 1').get();
+  if (available) { db.prepare('DELETE FROM available_member_numbers WHERE number=?').run(available.number); return available.number; }
+  return db.prepare("UPDATE counters SET value=value+1 WHERE name='member' RETURNING value").get().value;
+}
+export function releaseMemberNumber(number) {
+  if (number != null) db.prepare('INSERT OR IGNORE INTO available_member_numbers (number) VALUES (?)').run(number);
 }
 
 if (!db.prepare('SELECT id FROM benefits LIMIT 1').get() && !db.prepare("SELECT value FROM settings WHERE key='seeded'").get()) {
