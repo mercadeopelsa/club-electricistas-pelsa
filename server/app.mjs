@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit';
 import multer from 'multer';
 import sharp from 'sharp';
 import QRCode from 'qrcode';
+import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { randomBytes, createHash } from 'node:crypto';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
@@ -52,7 +53,8 @@ function visibleContent() {
     benefits: db.prepare('SELECT * FROM benefits WHERE active=1 ORDER BY position,id').all(),
     solutions: db.prepare('SELECT id,kind,title,description,icon,position FROM solutions WHERE active=1 ORDER BY position,id').all(),
     promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now),
-    events: db.prepare('SELECT id,title,description,location,starts_at,ends_at,registration_url,image,video_embed,video_provider FROM events WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id').all(now)
+    events: db.prepare("SELECT id,title,description,location,starts_at,ends_at,registration_url,image,video_embed,video_provider FROM events WHERE deleted_at IS NULL AND active=1 ORDER BY COALESCE(NULLIF(starts_at,''),created_at),id").all(),
+    rewards: db.prepare('SELECT id,title,description,purchase_amount,starts_at,ends_at,image FROM rewards WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id LIMIT 2').all(now)
   };
 }
 async function cleanImage(file) {
@@ -63,6 +65,14 @@ async function cleanImage(file) {
     if (!['jpeg', 'png', 'webp'].includes(meta.format)) throw new Error('format');
     return await input.rotate().resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
   } catch { throw new Error('UPLOAD:No se pudo leer la imagen. Usa una foto JPG, PNG o WebP válida de hasta 25 megapíxeles.'); }
+}
+async function cleanCredential(file) {
+  if (!file) throw new Error('UPLOAD:Adjunta una fotografía o PDF del carnet SIGET.');
+  if (file.mimetype === 'application/pdf') {
+    if (file.buffer.subarray(0, 5).toString() !== '%PDF-') throw new Error('UPLOAD:El archivo no es un PDF válido.');
+    return { bytes:file.buffer, type:'application/pdf' };
+  }
+  return { bytes:await cleanImage(file), type:'image/jpeg' };
 }
 const registrationSchema = z.object({
   name: z.string().trim().min(3).max(120), email: z.email().max(254).transform(v => v.toLowerCase()),
@@ -103,8 +113,28 @@ app.get('/api/members/:token', (req, res) => {
   const m = db.prepare("SELECT id,name,email,whatsapp,number,show_email,show_whatsapp,approved_at FROM members WHERE token=? AND status='approved'").get(req.params.token);
   if (!m) return res.status(404).json({ error: 'Este perfil no está disponible. Comunícate con mercadeo de PELSA.' });
   db.prepare('UPDATE members SET profile_views=profile_views+1 WHERE id=?').run(m.id);
-  res.json({ name: m.name, number: memberNumber(m.number), email: m.show_email ? m.email : null, whatsapp: m.show_whatsapp ? m.whatsapp : null, approvedAt: m.approved_at, referralUrl: `${appUrl}/registro?ref=${memberNumber(m.number)}`, ...visibleContent() });
+  const siget = db.prepare('SELECT status,review_note,submitted_at,keychain_delivered FROM siget_submissions WHERE member_id=?').get(m.id) || null;
+  res.json({ name: m.name, number: memberNumber(m.number), email: m.show_email ? m.email : null, whatsapp: m.show_whatsapp ? m.whatsapp : null, approvedAt: m.approved_at, referralUrl: `${appUrl}/registro?ref=${memberNumber(m.number)}`, siget, ...visibleContent() });
 });
+app.post('/api/members/:token/siget', limited(5, 60 * 60 * 1000), upload.single('credential'), wrap(async (req, res) => {
+  const member = db.prepare("SELECT id FROM members WHERE token=? AND status='approved'").get(req.params.token);
+  if (!member) return res.status(404).json({ error:'Este perfil no está disponible.' });
+  const credential = await cleanCredential(req.file);
+  const previous = db.prepare('SELECT file_name FROM siget_submissions WHERE member_id=?').get(member.id);
+  const fileName = `${randomBytes(20).toString('hex')}.enc`;
+  await writeFile(path.join(dataDir, 'siget', fileName), encrypt(credential.bytes), { mode:0o600 });
+  try {
+    db.prepare(`INSERT INTO siget_submissions (member_id,file_name,file_type)
+      VALUES (?,?,?)
+      ON CONFLICT(member_id) DO UPDATE SET file_name=excluded.file_name,file_type=excluded.file_type,status='pending',review_note='',submitted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),reviewed_at=NULL,reviewed_by=NULL,keychain_delivered=0,keychain_delivered_at=NULL`).run(member.id, fileName, credential.type);
+    if (previous?.file_name) await unlink(path.join(dataDir, 'siget', previous.file_name)).catch(() => {});
+    audit(`member:${member.id}`, 'siget.submitted', member.id);
+    res.status(201).json({ status:'pending', message:'Recibimos tu carnet SIGET. Mercadeo lo revisará y te notificará.' });
+  } catch (error) {
+    await unlink(path.join(dataDir, 'siget', fileName)).catch(() => {});
+    throw error;
+  }
+}));
 function activePromotionForMember(req) {
   const now = new Date().toISOString();
   const member = db.prepare("SELECT id,name FROM members WHERE token=? AND status='approved'").get(String(req.query.member || ''));
@@ -138,10 +168,15 @@ app.get('/api/promotions/:file', wrap(async (req, res) => {
 }));
 app.get('/api/events/media/:file', wrap(async (req, res) => {
   if (!/^[a-f0-9]{40}\.jpg$/.test(req.params.file)) return res.sendStatus(404);
-  const now = new Date().toISOString();
-  const event = db.prepare('SELECT id FROM events WHERE image=? AND deleted_at IS NULL AND active=1 AND ends_at>=?').get(req.params.file, now);
+  const event = db.prepare('SELECT id FROM events WHERE image=? AND deleted_at IS NULL AND active=1').get(req.params.file);
   if (!event) return res.sendStatus(404);
   res.type('jpg').send(await readFile(path.join(dataDir, 'events', req.params.file)));
+}));
+app.get('/api/rewards/media/:file', wrap(async (req, res) => {
+  if (!/^[a-f0-9]{40}\.jpg$/.test(req.params.file)) return res.sendStatus(404);
+  const reward = db.prepare('SELECT id FROM rewards WHERE image=? AND deleted_at IS NULL AND active=1').get(req.params.file);
+  if (!reward) return res.sendStatus(404);
+  res.type('jpg').send(await readFile(path.join(dataDir, 'rewards', req.params.file)));
 }));
 app.post('/api/login', limited(10, 15 * 60 * 1000), wrap(async (req, res) => {
   const { email, password } = z.object({ email: z.string().max(254), password: z.string().max(200) }).parse(req.body);
@@ -162,7 +197,7 @@ app.post('/api/admin/logout', (req, res) => {
   res.clearCookie(cookieName, cookieOptions).json({ ok: true });
 });
 app.get('/api/admin/members', (_req, res) => {
-  const members = db.prepare('SELECT * FROM members ORDER BY created_at DESC,id DESC').all().map(adminMember);
+  const members = db.prepare('SELECT m.*,s.status siget_status,s.submitted_at siget_submitted_at,s.keychain_delivered,s.file_type siget_file_type,s.review_note siget_review_note FROM members m LEFT JOIN siget_submissions s ON s.member_id=m.id ORDER BY m.created_at DESC,m.id DESC').all().map(adminMember);
   const duiCounts = members.reduce((counts, member) => {
     const dui = normalizeDui(member.dui);
     if (dui) counts.set(dui, (counts.get(dui) || 0) + 1);
@@ -170,6 +205,43 @@ app.get('/api/admin/members', (_req, res) => {
   }, new Map());
   res.json(members.map(member => ({ ...member, duplicateCount:duiCounts.get(normalizeDui(member.dui)) || 0 })));
 });
+const exportFields = {
+  number:['N.º de miembro', member => memberNumber(member.number) || ''],
+  name:['Nombre', member => member.name],
+  email:['Correo', member => member.email],
+  whatsapp:['WhatsApp', member => member.whatsapp],
+  dui:['DUI', member => decrypt(member.dui_encrypted).toString()],
+  branch:['Sucursal', member => ({san_salvador:'San Salvador',san_miguel:'San Miguel',ambas:'Ambas'})[member.branch_preference] || ''],
+  status:['Estado', member => ({pending:'Pendiente',approved:'Activo',rejected:'Rechazado',suspended:'Suspendido'})[member.status] || member.status],
+  registered_at:['Fecha de registro', member => member.created_at],
+  approved_at:['Fecha de aprobación', member => member.approved_at || ''],
+  marketing_opt_in:['Autoriza comunicaciones', member => member.marketing_opt_in ? 'Sí' : 'No'],
+  profile_views:['Visitas al perfil', member => member.profile_views],
+  siget_status:['Carnet SIGET', member => ({pending:'Pendiente',approved:'Aprobado',rejected:'Rechazado'})[member.siget_status] || 'No enviado'],
+};
+app.post('/api/admin/members/export', wrap(async (req, res) => {
+  const options = z.object({
+    fields:z.array(z.enum(Object.keys(exportFields))).min(1).max(Object.keys(exportFields).length),
+    status:z.enum(['all','pending','approved','rejected','suspended','siget']).default('all'),
+    branch:z.enum(['all','san_salvador','san_miguel','ambas']).default('all')
+  }).parse(req.body);
+  const members = db.prepare('SELECT m.*,s.status siget_status FROM members m LEFT JOIN siget_submissions s ON s.member_id=m.id ORDER BY m.number,m.name').all()
+    .filter(member => (options.status==='all'||options.status==='siget'&&member.siget_status==='pending'||member.status===options.status) && (options.branch==='all'||member.branch_preference===options.branch));
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Club de Electricistas PELSA';
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet('Miembros');
+  sheet.columns = options.fields.map(field => ({ header:exportFields[field][0], key:field, width:field==='name'?34:field.includes('at')?22:20 }));
+  for (const member of members) sheet.addRow(Object.fromEntries(options.fields.map(field => [field,exportFields[field][1](member)])));
+  sheet.getRow(1).font = { bold:true, color:{argb:'FF1D210F'} };
+  sheet.getRow(1).fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFF6D20B'} };
+  sheet.views = [{ state:'frozen', ySplit:1 }];
+  sheet.autoFilter = { from:{row:1,column:1}, to:{row:Math.max(1,sheet.rowCount),column:options.fields.length} };
+  const buffer = await workbook.xlsx.writeBuffer();
+  audit(req.admin.email, 'members.exported', `${members.length} registros`);
+  res.set('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.attachment(`miembros-club-pelsa-${new Date().toISOString().slice(0,10)}.xlsx`).send(Buffer.from(buffer));
+}));
 app.post('/api/admin/members/:id/review', (req, res) => {
   const fields = z.object({ status: z.enum(['approved', 'rejected', 'suspended', 'pending']), note: z.string().trim().max(500).default('') }).parse(req.body);
   const m = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
@@ -197,7 +269,7 @@ app.patch('/api/admin/members/:id', (req, res) => {
   audit(req.admin.email, 'member.updated', req.params.id); res.json({ ok: true });
 });
 app.delete('/api/admin/members/:id', wrap(async (req, res) => {
-  const member = db.prepare('SELECT id,name,number,front_file,dui_hash,dui_encrypted FROM members WHERE id=?').get(req.params.id);
+  const member = db.prepare('SELECT m.id,m.name,m.number,m.front_file,m.dui_hash,m.dui_encrypted,s.file_name siget_file FROM members m LEFT JOIN siget_submissions s ON s.member_id=m.id WHERE m.id=?').get(req.params.id);
   if (!member) return res.sendStatus(404);
   const deletedDui = decrypt(member.dui_encrypted).toString();
   db.exec('BEGIN IMMEDIATE');
@@ -213,6 +285,7 @@ app.delete('/api/admin/members/:id', wrap(async (req, res) => {
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   if (member.front_file) await unlink(path.join(dataDir, 'documents', member.front_file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  if (member.siget_file) await unlink(path.join(dataDir, 'siget', member.siget_file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
   res.json({ ok:true });
 }));
 app.get('/api/admin/members/:id/documents/:side', wrap(async (req, res) => {
@@ -225,6 +298,30 @@ app.get('/api/admin/members/:id/documents/:side', wrap(async (req, res) => {
   if (req.query.download === '1') res.attachment(`solicitud-${req.params.id}-${req.params.side}.jpg`);
   res.type('jpg').send(body);
 }));
+app.get('/api/admin/members/:id/siget', wrap(async (req, res) => {
+  const submission = db.prepare('SELECT file_name,file_type FROM siget_submissions WHERE member_id=?').get(req.params.id);
+  if (!submission) return res.sendStatus(404);
+  const body = decrypt(await readFile(path.join(dataDir, 'siget', submission.file_name)));
+  audit(req.admin.email, req.query.download === '1' ? 'siget.downloaded' : 'siget.viewed', req.params.id);
+  const extension = submission.file_type === 'application/pdf' ? 'pdf' : 'jpg';
+  if (req.query.download === '1' || submission.file_type === 'application/pdf') res.attachment(`carnet-siget-miembro-${req.params.id}.${extension}`);
+  res.type(submission.file_type).send(body);
+}));
+app.post('/api/admin/members/:id/siget/review', (req, res) => {
+  const review = z.object({ status:z.enum(['approved','rejected']), note:z.string().trim().max(500).default('') }).parse(req.body);
+  if (review.status==='rejected' && !review.note) return res.status(400).json({ error:'Indica el motivo del rechazo.' });
+  const result = db.prepare("UPDATE siget_submissions SET status=?,review_note=?,reviewed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),reviewed_by=? WHERE member_id=?").run(review.status, review.note, req.admin.id, req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  audit(req.admin.email, `siget.${review.status}`, req.params.id);
+  res.json({ ok:true });
+});
+app.patch('/api/admin/members/:id/siget/keychain', (req, res) => {
+  const value = z.object({ delivered:z.boolean() }).parse(req.body);
+  const result = db.prepare("UPDATE siget_submissions SET keychain_delivered=?,keychain_delivered_at=CASE WHEN ?=1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END WHERE member_id=? AND status='approved'").run(+value.delivered,+value.delivered,req.params.id);
+  if (!result.changes) return res.status(404).json({ error:'Primero debes aprobar el carnet SIGET.' });
+  audit(req.admin.email, 'siget.keychain', `${req.params.id}:${value.delivered?'entregado':'pendiente'}`);
+  res.json({ ok:true });
+});
 app.get('/api/admin/members/:id/qr', wrap(async (req, res) => {
   const m = db.prepare("SELECT number,token FROM members WHERE id=? AND status='approved'").get(req.params.id);
   if (!m) return res.sendStatus(404);
@@ -233,7 +330,7 @@ app.get('/api/admin/members/:id/qr', wrap(async (req, res) => {
   const png = await QRCode.toBuffer(url, { width: 1000, margin: 4, errorCorrectionLevel: 'M' });
   res.attachment(`${referral ? 'recomendacion' : 'perfil'}-${memberNumber(m.number)}.png`).type('png').send(png);
 }));
-app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), solutions: db.prepare('SELECT * FROM solutions ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all(), events: db.prepare('SELECT * FROM events WHERE deleted_at IS NULL ORDER BY starts_at,id').all() }));
+app.get('/api/admin/content', (_req, res) => res.json({ benefits: db.prepare('SELECT * FROM benefits ORDER BY position,id').all(), solutions: db.prepare('SELECT * FROM solutions ORDER BY position,id').all(), promotions: db.prepare('SELECT * FROM promotions WHERE deleted_at IS NULL ORDER BY id DESC').all(), events: db.prepare("SELECT * FROM events WHERE deleted_at IS NULL ORDER BY COALESCE(NULLIF(starts_at,''),created_at),id").all(), rewards:db.prepare('SELECT * FROM rewards WHERE deleted_at IS NULL ORDER BY starts_at,id').all() }));
 app.get('/api/admin/kpis', (_req, res) => res.json({
   summary: {
     profileViews: db.prepare('SELECT COALESCE(SUM(profile_views),0) value FROM members').get().value,
@@ -303,6 +400,44 @@ app.get('/api/admin/promotions/:id/image', wrap(async (req, res) => {
   if (!p?.image) return res.sendStatus(404);
   res.type('jpg').send(await readFile(path.join(dataDir, 'promotions', p.image)));
 }));
+const rewardSchema = z.object({
+  title:z.string().trim().min(2).max(120),
+  description:z.string().trim().max(1000).default(''),
+  purchase_amount:z.coerce.number().min(0).max(1000000),
+  starts_at:z.iso.datetime(),
+  ends_at:z.iso.datetime(),
+  active:z.enum(['true','false']).transform(value => value==='true')
+}).refine(value => value.ends_at>value.starts_at,'La fecha final debe ser posterior a la inicial.');
+async function saveReward(req,res) {
+  const reward=rewardSchema.parse(req.body);
+  const existing=req.params.id?db.prepare('SELECT * FROM rewards WHERE id=? AND deleted_at IS NULL').get(req.params.id):null;
+  if(req.params.id&&!existing)return res.sendStatus(404);
+  let image=existing?.image||null;let createdImage;
+  if(req.file){const bytes=await cleanImage(req.file);createdImage=`${randomBytes(20).toString('hex')}.jpg`;await writeFile(path.join(dataDir,'rewards',createdImage),bytes);image=createdImage;}
+  if(!image)return res.status(400).json({error:'Agrega una imagen del promocional.'});
+  try{
+    let id=req.params.id;
+    const values=[reward.title,reward.description,reward.purchase_amount,reward.starts_at,reward.ends_at,image,+reward.active];
+    if(existing)db.prepare('UPDATE rewards SET title=?,description=?,purchase_amount=?,starts_at=?,ends_at=?,image=?,active=? WHERE id=?').run(...values,id);
+    else id=Number(db.prepare('INSERT INTO rewards (title,description,purchase_amount,starts_at,ends_at,image,active) VALUES (?,?,?,?,?,?,?)').run(...values).lastInsertRowid);
+    if(createdImage&&existing?.image)await unlink(path.join(dataDir,'rewards',existing.image)).catch(()=>{});
+    audit(req.admin.email,'reward.saved',id);res.json({id});
+  }catch(error){if(createdImage)await unlink(path.join(dataDir,'rewards',createdImage)).catch(()=>{});throw error;}
+}
+app.post('/api/admin/rewards',upload.single('image'),wrap(saveReward));
+app.put('/api/admin/rewards/:id',upload.single('image'),wrap(saveReward));
+app.delete('/api/admin/rewards/:id',wrap(async(req,res)=>{
+  const reward=db.prepare('SELECT image FROM rewards WHERE id=? AND deleted_at IS NULL').get(req.params.id);
+  if(!reward)return res.sendStatus(404);
+  db.prepare("UPDATE rewards SET active=0,image=NULL,deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").run(req.params.id);
+  if(reward.image)await unlink(path.join(dataDir,'rewards',reward.image)).catch(()=>{});
+  audit(req.admin.email,'reward.deleted',req.params.id);res.json({ok:true});
+}));
+app.get('/api/admin/rewards/:id/image',wrap(async(req,res)=>{
+  const reward=db.prepare('SELECT image FROM rewards WHERE id=? AND deleted_at IS NULL').get(req.params.id);
+  if(!reward?.image)return res.sendStatus(404);
+  res.type('jpg').send(await readFile(path.join(dataDir,'rewards',reward.image)));
+}));
 function normalizeVideoUrl(value) {
   if (!value) return { url: '', embed: '', provider: '' };
   let url;
@@ -321,10 +456,10 @@ function normalizeVideoUrl(value) {
   throw new Error('VIDEO:Usa un enlace público de YouTube, Instagram, Facebook o TikTok.');
 }
 const eventSchema = z.object({
-  title: z.string().trim().min(3).max(120), description: z.string().trim().min(3).max(2000), location: z.string().trim().min(2).max(160),
-  starts_at: z.iso.datetime(), ends_at: z.iso.datetime(), registration_url: z.string().trim().max(1000).refine(v => !v || /^https:\/\//i.test(v), 'El enlace de inscripción debe comenzar con https://.'),
+  title: z.string().trim().max(120).default(''), description: z.string().trim().max(2000).default(''), location: z.string().trim().max(160).default(''),
+  starts_at: z.union([z.literal(''),z.iso.datetime()]).default(''), ends_at: z.union([z.literal(''),z.iso.datetime()]).default(''), registration_url: z.string().trim().max(1000).refine(v => !v || /^https:\/\//i.test(v), 'El enlace de inscripción debe comenzar con https://.'),
   video_url: z.string().trim().max(1000).default(''), active: z.enum(['true', 'false']).transform(v => v === 'true')
-}).refine(v => v.ends_at > v.starts_at, 'La fecha final debe ser posterior a la inicial.');
+}).refine(v => !v.starts_at || !v.ends_at || v.ends_at > v.starts_at, 'La fecha final debe ser posterior a la inicial.');
 async function saveEvent(req, res) {
   const event = eventSchema.parse(req.body);
   const video = normalizeVideoUrl(event.video_url);
@@ -335,6 +470,7 @@ async function saveEvent(req, res) {
     const bytes = await cleanImage(req.file); createdImage = `${randomBytes(20).toString('hex')}.jpg`;
     await writeFile(path.join(dataDir, 'events', createdImage), bytes); image = createdImage;
   }
+  if (!event.title && !event.description && !event.location && !image && !video.url) return res.status(400).json({ error:'Agrega al menos una imagen, un video o algún texto para el evento.' });
   try {
     let id = req.params.id;
     const values = [event.title, event.description, event.location, event.starts_at, event.ends_at, event.registration_url, image, video.url, video.embed, video.provider, +event.active];

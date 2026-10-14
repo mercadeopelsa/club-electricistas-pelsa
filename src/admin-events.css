@@ -2,4 +2,6 @@
 .branch-filter select{height:37px;min-height:37px;margin:0;background:#12160e;border-color:#333e27;color:#aebd9b;font-size:.75rem;padding:7px 32px 7px 11px}.branch-badge{display:inline-flex;padding:5px 8px;border-radius:20px;background:#29351f;color:#b8cba4;font-size:.7rem;white-space:nowrap}
 .solution-admin-actions{display:flex;align-items:center;gap:18px}
 @media(max-width:800px){.admin-sidebar nav{overflow-x:auto;scrollbar-width:none}.admin-sidebar nav::-webkit-scrollbar{display:none}.admin-event-media{margin:-20px -20px 20px;height:180px}}
+.event-portrait-preview{aspect-ratio:4/5;max-height:520px;object-fit:cover}.event-admin-video.event-portrait-preview{height:auto;max-height:none}.export-fields{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;margin:18px 0}.export-fields .check-label{margin:8px 0}.export-button{min-height:37px;padding:7px 12px}.siget-review{border-color:#655f2c!important;background:#f6d20b08}.siget-review .button-row{margin:16px 0}.siget-review label{margin-top:15px}
+@media(max-width:560px){.export-fields{grid-template-columns:1fr}}
 @media(max-width:520px){.branch-filter{width:100%}.branch-filter select{width:100%}}

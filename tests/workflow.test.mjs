@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import sharp from 'sharp';
+import ExcelJS from 'exceljs';
 
 const testDir = await mkdtemp(path.join(os.tmpdir(), 'pelsa-test-'));
 process.env.DATA_DIR = testDir; process.env.DATA_KEY = randomBytes(32).toString('hex');
@@ -80,7 +81,7 @@ test('scheduled promotions and hidden benefits are excluded from public response
     if(title==='Vigente') f.set('image',new Blob([image],{type:'image/png'}),'promotion.png');
     assert.equal((await request('/api/admin/promotions',{method:'POST',authenticated:true,body:f})).status,200);
   }
-  const content=await(await request('/api/content')).json(); assert.deepEqual(content.promotions.map(p=>p.title),['Vigente']);
+  const content=await(await request('/api/content')).json(); assert.deepEqual(content.promotions.map(p=>p.title),['Vigente']); assert.ok(!content.benefits.some(item=>item.title==='Descuentos exclusivos'));
   const activePromotion=content.promotions[0]; const activeMember=db.prepare("SELECT token,name FROM members WHERE status='approved' ORDER BY id LIMIT 1").get(); assert.ok(activePromotion.image); assert.equal((await request(`/api/promotions/${activePromotion.image}`)).status,200);
   const invalidClick=await request(`/api/promotions/${activePromotion.id}/click?member=invalid`,{method:'POST'}); assert.equal(invalidClick.status,404);
   const click=await request(`/api/promotions/${activePromotion.id}/click?member=${activeMember.token}`,{method:'POST'}); assert.equal(click.status,204);
@@ -111,6 +112,15 @@ test('upcoming events support images and approved embedded video providers',asyn
   assert.equal((await request(`/api/admin/events/${first.id}`,{method:'DELETE',authenticated:true})).status,200); assert.ok(!(await(await request('/api/content')).json()).events.some(event=>event.id===first.id)); await assert.rejects(readFile(path.join(testDir,'events',first.image)));
 });
 
+test('events can be image-only, remain visible without dates and use manual removal',async()=>{
+  const formData=new FormData();
+  for(const [key,value] of Object.entries({title:'',description:'',location:'',starts_at:'',ends_at:'',registration_url:'',video_url:'',active:'true'}))formData.set(key,value);
+  formData.set('image',new Blob([image],{type:'image/png'}),'evento-vertical.png');
+  const created=await request('/api/admin/events',{method:'POST',authenticated:true,body:formData});assert.equal(created.status,200);const {id}=await created.json();
+  const content=await(await request('/api/content')).json();const event=content.events.find(item=>item.id===id);assert.ok(event);assert.equal(event.title,'');assert.equal(event.starts_at,'');assert.equal((await request(`/api/events/media/${event.image}`)).status,200);
+  assert.equal((await request(`/api/admin/events/${id}`,{method:'DELETE',authenticated:true})).status,200);
+});
+
 test('services and product categories are editable, ordered and publicly filtered',async()=>{
   assert.equal(db.prepare('SELECT COUNT(*) count FROM solutions').get().count,20); db.prepare('DELETE FROM solutions').run();
   assert.equal((await request('/api/admin/solutions',{method:'POST',body:{kind:'service',title:'Sin acceso',description:'No debe guardarse',icon:'wrench',position:0,active:true}})).status,401);
@@ -132,6 +142,30 @@ test('campaign drafts segment only members with communication consent',async()=>
   await new Promise(resolve=>setTimeout(resolve,50));
   dashboard=await(await request('/api/admin/campaigns',{authenticated:true})).json(); const completed=dashboard.campaigns.find(item=>item.id===created.id); assert.equal(completed.status,'completed'); assert.equal(completed.sent_count,completed.recipient_count); assert.ok(completed.sent_count>=1);
   assert.equal((await request(`/api/admin/campaigns/${created.id}`,{method:'DELETE',authenticated:true})).status,404);
+});
+
+test('SIGET credentials are private, reviewable and include keychain tracking',async()=>{
+  const member=db.prepare("SELECT id,token FROM members WHERE status='approved' ORDER BY id LIMIT 1").get();assert.ok(member);
+  const credential=new FormData();credential.set('credential',new Blob([image],{type:'image/png'}),'carnet.png');
+  const submitted=await request(`/api/members/${member.token}/siget`,{method:'POST',body:credential});assert.equal(submitted.status,201);
+  assert.equal((await request(`/api/admin/members/${member.id}/siget`)).status,401);
+  assert.equal((await request(`/api/admin/members/${member.id}/siget`,{authenticated:true})).headers.get('content-type'),'image/jpeg');
+  let profile=await(await request(`/api/members/${member.token}`)).json();assert.equal(profile.siget.status,'pending');
+  assert.equal((await request(`/api/admin/members/${member.id}/siget/review`,{method:'POST',authenticated:true,body:{status:'approved',note:''}})).status,200);
+  assert.equal((await request(`/api/admin/members/${member.id}/siget/keychain`,{method:'PATCH',authenticated:true,body:{delivered:true}})).status,200);
+  profile=await(await request(`/api/members/${member.token}`)).json();assert.equal(profile.siget.status,'approved');assert.equal(profile.siget.keychain_delivered,1);
+});
+
+test('rewards publish current and upcoming periods and member exports contain selected columns',async()=>{
+  const now=Date.now();const ids=[];
+  for(const [title,start,end] of [['Recompensa vigente',now-3600000,now+3600000],['Recompensa próxima',now+7200000,now+10800000]]){
+    const reward=new FormData();for(const [key,value] of Object.entries({title,description:'Promocional de prueba',purchase_amount:'50',starts_at:new Date(start).toISOString(),ends_at:new Date(end).toISOString(),active:'true'}))reward.set(key,value);
+    reward.set('image',new Blob([image],{type:'image/png'}),'premio.png');const response=await request('/api/admin/rewards',{method:'POST',authenticated:true,body:reward});assert.equal(response.status,200);ids.push((await response.json()).id);
+  }
+  const content=await(await request('/api/content')).json();assert.deepEqual(content.rewards.map(item=>item.title),['Recompensa vigente','Recompensa próxima']);assert.equal((await request(`/api/rewards/media/${content.rewards[0].image}`)).status,200);
+  const exported=await request('/api/admin/members/export',{method:'POST',authenticated:true,body:{fields:['number','name','branch','siget_status'],status:'all',branch:'all'}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-type'),/spreadsheetml/);
+  const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));const sheet=workbook.worksheets[0];assert.deepEqual(sheet.getRow(1).values.slice(1),['N.º de miembro','Nombre','Sucursal','Carnet SIGET']);assert.ok(sheet.rowCount>1);
+  for(const id of ids)assert.equal((await request(`/api/admin/rewards/${id}`,{method:'DELETE',authenticated:true})).status,200);
 });
 
 test('admins can permanently remove a profile without breaking referrals',async()=>{

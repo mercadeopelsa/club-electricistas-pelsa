@@ -8,6 +8,8 @@ export const dataDir = path.resolve(process.env.DATA_DIR || './data');
 mkdirSync(path.join(dataDir, 'documents'), { recursive: true });
 mkdirSync(path.join(dataDir, 'promotions'), { recursive: true });
 mkdirSync(path.join(dataDir, 'events'), { recursive: true });
+mkdirSync(path.join(dataDir, 'rewards'), { recursive: true });
+mkdirSync(path.join(dataDir, 'siget'), { recursive: true });
 const keyText = process.env.DATA_KEY || '';
 if (!/^[a-f0-9]{64}$/i.test(keyText)) throw new Error('DATA_KEY missing or invalid. Run npm run setup.');
 const key = Buffer.from(keyText, 'hex');
@@ -18,6 +20,7 @@ db.exec(readFileSync(new URL('./migrations/002-events.sql', import.meta.url), 'u
 db.exec(readFileSync(new URL('./migrations/003-member-branch.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/004-solutions.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('./migrations/005-campaigns.sql', import.meta.url), 'utf8'));
+db.exec(readFileSync(new URL('./migrations/006-rewards-siget.sql', import.meta.url), 'utf8'));
 function ensureColumn(table, column, definition) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
@@ -69,10 +72,13 @@ if (!db.prepare('SELECT id FROM benefits LIMIT 1').get() && !db.prepare("SELECT 
   [
     ['Participación en eventos', 'Encuentros para conectar con otros profesionales y conocer novedades del sector.', 'calendar'],
     ['Capacitación continua', 'Oportunidades para seguir aprendiendo y fortalecer tus conocimientos.', 'graduation'],
-    ['Descuentos exclusivos', 'Conoce las promociones y condiciones especiales disponibles para miembros.', 'tag'],
     ['Asesoría especializada', 'Acompañamiento para elegir los productos que necesitas en tus proyectos.', 'headset']
   ].forEach((item, index) => insert.run(...item, index));
   db.prepare("INSERT INTO settings (key,value) VALUES ('seeded','1')").run();
+}
+if (!db.prepare("SELECT value FROM settings WHERE key='removed-exclusive-discount-benefit-v1'").get()) {
+  db.prepare("DELETE FROM benefits WHERE lower(trim(title))='descuentos exclusivos'").run();
+  db.prepare("INSERT INTO settings (key,value) VALUES ('removed-exclusive-discount-benefit-v1',?)").run(new Date().toISOString());
 }
 
 if (!db.prepare("SELECT value FROM settings WHERE key='solutions_seeded_v1'").get()) {
