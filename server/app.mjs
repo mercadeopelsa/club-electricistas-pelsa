@@ -47,6 +47,29 @@ function adminMember(m) {
   const { dui_hash, dui_encrypted, front_file, back_file, ...safe } = m;
   return { ...safe, number: memberNumber(m.number), dui: decrypt(dui_encrypted).toString(), hasFrontDocument: Boolean(front_file), profileUrl: m.token ? `${appUrl}/m/${m.token}` : null };
 }
+function findMemberByIdentity(value) {
+  const query = String(value || '').trim();
+  if (!query) return null;
+  const members = db.prepare('SELECT id,name,email,number,token,status,dui_hash,dui_encrypted,created_at FROM members ORDER BY created_at,id').all();
+  const normalizedDui = normalizeDui(query);
+  if (/^\d{9}$/.test(normalizedDui)) {
+    const hash = duiHash(normalizedDui);
+    const byDui = members.find(member => member.dui_hash === hash || normalizeDui(decrypt(member.dui_encrypted).toString()) === normalizedDui);
+    if (byDui) return byDui;
+  }
+  if (query.includes('@')) {
+    const email = query.toLowerCase();
+    const byEmail = members.find(member => member.email.toLowerCase() === email);
+    if (byEmail) return byEmail;
+  }
+  if (/^\d{1,9}$/.test(query)) return members.find(member => member.number === Number(query)) || null;
+  return null;
+}
+function publicMemberMatch(member) {
+  if (!member) return { found:false };
+  const active = member.status === 'approved' && member.token;
+  return { found:true, name:member.name, number:memberNumber(member.number), status:member.status, profileUrl:active ? `${appUrl}/m/${member.token}` : null };
+}
 function visibleContent() {
   const now = new Date().toISOString();
   return {
@@ -84,11 +107,16 @@ const registrationSchema = z.object({
 });
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/content', (_req, res) => res.json(visibleContent()));
+app.post('/api/members/lookup', limited(20, 60 * 60 * 1000), (req, res) => {
+  const { query } = z.object({ query:z.string().trim().min(3).max(254) }).parse(req.body);
+  res.json(publicMemberMatch(findMemberByIdentity(query)));
+});
 app.post('/api/registrations', limited(10, 60 * 60 * 1000), upload.fields([{ name: 'front', maxCount: 1 }]), wrap(async (req, res) => {
   const fields = registrationSchema.parse(req.body);
   const h = duiHash(fields.dui);
-  const duplicateMessage = 'Ya existe una solicitud o membresía con este DUI. Comunícate con mercadeo de PELSA para revisarla.';
-  if (db.prepare('SELECT id FROM members WHERE dui_hash=?').get(h)) return res.status(409).json({ error: duplicateMessage });
+  const duplicateMessage = 'Este DUI ya está registrado en el Club de Electricistas PELSA.';
+  const existing = findMemberByIdentity(fields.dui);
+  if (existing) return res.status(409).json({ error: duplicateMessage, existing:publicMemberMatch(existing) });
   let referredBy = null;
   if (fields.referral) {
     if (!/^\d{1,9}$/.test(fields.referral)) return res.status(400).json({ error: 'Revisa el código de quien te recomendó.' });
@@ -205,6 +233,38 @@ app.get('/api/admin/members', (_req, res) => {
   }, new Map());
   res.json(members.map(member => ({ ...member, duplicateCount:duiCounts.get(normalizeDui(member.dui)) || 0 })));
 });
+app.post('/api/admin/members/deduplicate', wrap(async (req, res) => {
+  const members = db.prepare('SELECT m.id,m.name,m.number,m.created_at,m.front_file,m.dui_hash,m.dui_encrypted,s.file_name siget_file FROM members m LEFT JOIN siget_submissions s ON s.member_id=m.id ORDER BY m.created_at,m.id').all();
+  const groups = new Map();
+  for (const member of members) {
+    const dui = normalizeDui(decrypt(member.dui_encrypted).toString());
+    if (!/^\d{9}$/.test(dui)) continue;
+    if (!groups.has(dui)) groups.set(dui, []);
+    groups.get(dui).push(member);
+  }
+  const duplicates = [...groups.entries()].filter(([,items]) => items.length > 1);
+  const files = []; let removed = 0; let freedNumbers = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const [dui, items] of duplicates) {
+      const [survivor, ...discarded] = items;
+      for (const member of discarded) {
+        db.prepare('UPDATE members SET referred_by=? WHERE referred_by=? AND id<>?').run(survivor.id, member.id, survivor.id);
+        db.prepare('UPDATE members SET referred_by=NULL WHERE id=? AND referred_by=?').run(survivor.id, member.id);
+        db.prepare('DELETE FROM members WHERE id=?').run(member.id);
+        if (member.number != null) { releaseMemberNumber(member.number); freedNumbers += 1; }
+        if (member.front_file) files.push(path.join(dataDir, 'documents', member.front_file));
+        if (member.siget_file) files.push(path.join(dataDir, 'siget', member.siget_file));
+        removed += 1;
+      }
+      db.prepare('UPDATE members SET dui_hash=? WHERE id=?').run(duiHash(dui), survivor.id);
+    }
+    audit(req.admin.email, 'members.deduplicated', `${removed} perfiles; ${freedNumbers} números liberados`);
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  await Promise.all(files.map(file => unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; })));
+  res.json({ groups:duplicates.length, removed, freedNumbers });
+}));
 const exportFields = {
   number:['N.º de miembro', member => memberNumber(member.number) || ''],
   name:['Nombre', member => member.name],

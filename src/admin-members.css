@@ -3,3 +3,4 @@
 .duplicate-warning svg{flex:0 0 auto;margin-top:2px}.duplicate-warning strong{font-size:.82rem}.duplicate-warning p{margin:5px 0 0;color:#a9a06d;font-size:.73rem;line-height:1.5}
 .delete-member-zone{border:1px solid #713b33!important;border-radius:9px;padding:19px!important;background:#3a1e1a2e}.delete-member-zone h3{color:#efb0a5}.delete-member-zone p{margin-bottom:15px;color:#b6948e}
 .siget-badge{color:#d9cf70!important;border-color:#655f2c!important}
+.deduplicate-button{min-height:37px;padding:8px 12px;font-size:.75rem;white-space:nowrap}

@@ -11,7 +11,7 @@ const testDir = await mkdtemp(path.join(os.tmpdir(), 'pelsa-test-'));
 process.env.DATA_DIR = testDir; process.env.DATA_KEY = randomBytes(32).toString('hex');
 process.env.APP_URL = 'http://localhost:4173'; process.env.COOKIE_SECURE = 'false';
 process.env.MESSAGING_MODE = 'test';
-const { db, passwordHash, decrypt } = await import('../server/db.mjs');
+const { db, passwordHash, decrypt, encrypt, duiHash } = await import('../server/db.mjs');
 const { app } = await import('../server/app.mjs');
 let server, base, cookie;
 const image = await sharp({ create: { width: 80, height: 50, channels: 3, background: '#eecb00' } }).png().toBuffer();
@@ -45,6 +45,9 @@ test('registration, approval, privacy, referrals and suspension are durable and 
   const document=await readFile(path.join(testDir,'documents',row.front_file)); assert.notEqual(document[0],0xff); assert.ok(decrypt(document).length>0);
   const approved=await request(`/api/admin/members/${row.id}/review`,{method:'POST',authenticated:true,body:{status:'approved'}}); assert.equal(approved.status,200);
   const member=await approved.json(); assert.equal(member.number,'000001'); assert.equal(member.token.length,48);
+  for(const query of ['123456789','prueba@example.test','000001']){const found=await(await request('/api/members/lookup',{method:'POST',body:{query}})).json();assert.equal(found.found,true);assert.equal(found.number,'000001');assert.equal(found.profileUrl,`http://localhost:4173/m/${member.token}`);}
+  assert.equal((await(await request('/api/members/lookup',{method:'POST',body:{query:'nadie@example.test'}})).json()).found,false);
+  const duplicateRegistration=await request('/api/registrations',{method:'POST',body:form('123456789')});assert.equal(duplicateRegistration.status,409);assert.equal((await duplicateRegistration.json()).existing.profileUrl,`http://localhost:4173/m/${member.token}`);
   const profile=await(await request(`/api/members/${member.token}`)).json(); assert.equal(profile.email,null); assert.equal(profile.whatsapp,null); assert.equal(profile.dui,undefined); assert.equal(profile.front_file,undefined); assert.equal(profile.status,undefined);
   assert.equal((await request(`/api/admin/members/${row.id}/documents/front`,{authenticated:true})).headers.get('content-type'),'image/jpeg');
   assert.equal((await request(`/api/admin/members/${row.id}/documents/back`,{authenticated:true})).status,404);
@@ -166,6 +169,18 @@ test('rewards publish current and upcoming periods and member exports contain se
   const exported=await request('/api/admin/members/export',{method:'POST',authenticated:true,body:{fields:['number','name','branch','siget_status'],status:'all',branch:'all'}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-type'),/spreadsheetml/);
   const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));const sheet=workbook.worksheets[0];assert.deepEqual(sheet.getRow(1).values.slice(1),['N.º de miembro','Nombre','Sucursal','Carnet SIGET']);assert.ok(sheet.rowCount>1);
   for(const id of ids)assert.equal((await request(`/api/admin/rewards/${id}`,{method:'DELETE',authenticated:true})).status,200);
+});
+
+test('duplicate cleanup keeps the oldest profile and releases later member numbers',async()=>{
+  const dui='555555555';const now=new Date().toISOString();
+  const insert=db.prepare('INSERT INTO members (name,email,whatsapp,dui_hash,dui_encrypted,front_file,back_file,status,number,token,consent_at,created_at,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const first=Number(insert.run('Perfil original','original@example.test','50371111111',randomBytes(32).toString('hex'),encrypt(Buffer.from(dui)),'','','approved',700,'token-original-duplicate',now,'2025-01-01T00:00:00.000Z',now).lastInsertRowid);
+  const repeated=Number(insert.run('Perfil repetido','repetido@example.test','50372222222',randomBytes(32).toString('hex'),encrypt(Buffer.from(dui)),'','','approved',701,'token-repeated-duplicate',now,'2025-02-01T00:00:00.000Z',now).lastInsertRowid);
+  const referred=db.prepare('SELECT id,referred_by FROM members WHERE id NOT IN (?,?) ORDER BY id DESC LIMIT 1').get(first,repeated);db.prepare('UPDATE members SET referred_by=? WHERE id=?').run(repeated,referred.id);
+  const response=await request('/api/admin/members/deduplicate',{method:'POST',authenticated:true});assert.equal(response.status,200);const result=await response.json();assert.ok(result.removed>=1);assert.ok(result.freedNumbers>=1);
+  const survivor=db.prepare('SELECT id,number,dui_hash FROM members WHERE id IN (?,?)').get(first,repeated);assert.equal(survivor.id,first);assert.equal(survivor.number,700);assert.equal(survivor.dui_hash,duiHash(dui));assert.equal(db.prepare('SELECT referred_by FROM members WHERE id=?').get(referred.id).referred_by,first);assert.ok(db.prepare('SELECT number FROM available_member_numbers WHERE number=701').get());
+  const lookup=await(await request('/api/members/lookup',{method:'POST',body:{query:dui}})).json();assert.equal(lookup.number,'000700');assert.match(lookup.profileUrl,/token-original-duplicate/);
+  db.prepare('UPDATE members SET referred_by=? WHERE id=?').run(referred.referred_by,referred.id);
 });
 
 test('admins can permanently remove a profile without breaking referrals',async()=>{
