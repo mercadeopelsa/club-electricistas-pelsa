@@ -161,11 +161,11 @@ test('SIGET credentials are private, reviewable and include keychain tracking',a
 
 test('rewards publish current and upcoming periods and member exports contain selected columns',async()=>{
   const now=Date.now();const ids=[];
-  for(const [title,start,end] of [['Recompensa vigente',now-3600000,now+3600000],['Recompensa próxima',now+7200000,now+10800000]]){
+  for(const [title,start,end] of [['Recompensa vigente',now-3600000,now+3600000],['Recompensa próxima',now+7200000,now+10800000],['Recompensa futura',now+14400000,now+18000000]]){
     const reward=new FormData();for(const [key,value] of Object.entries({title,description:'Promocional de prueba',purchase_amount:'50',starts_at:new Date(start).toISOString(),ends_at:new Date(end).toISOString(),active:'true'}))reward.set(key,value);
     reward.set('image',new Blob([image],{type:'image/png'}),'premio.png');const response=await request('/api/admin/rewards',{method:'POST',authenticated:true,body:reward});assert.equal(response.status,200);ids.push((await response.json()).id);
   }
-  const content=await(await request('/api/content')).json();assert.deepEqual(content.rewards.map(item=>item.title),['Recompensa vigente','Recompensa próxima']);assert.equal((await request(`/api/rewards/media/${content.rewards[0].image}`)).status,200);
+  const content=await(await request('/api/content')).json();assert.deepEqual(content.rewards.map(item=>item.title),['Recompensa vigente','Recompensa próxima','Recompensa futura']);assert.equal((await request(`/api/rewards/media/${content.rewards[0].image}`)).status,200);
   const exported=await request('/api/admin/members/export',{method:'POST',authenticated:true,body:{fields:['number','name','branch','siget_status'],status:'all',branch:'all'}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-type'),/spreadsheetml/);
   const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));const sheet=workbook.worksheets[0];assert.deepEqual(sheet.getRow(1).values.slice(1),['N.º de miembro','Nombre','Sucursal','Carnet SIGET']);assert.ok(sheet.rowCount>1);
   for(const id of ids)assert.equal((await request(`/api/admin/rewards/${id}`,{method:'DELETE',authenticated:true})).status,200);

@@ -77,7 +77,7 @@ function visibleContent() {
     solutions: db.prepare('SELECT id,kind,title,description,icon,position FROM solutions WHERE active=1 ORDER BY position,id').all(),
     promotions: db.prepare('SELECT id,title,description,image,starts_at,ends_at FROM promotions WHERE deleted_at IS NULL AND active=1 AND starts_at<=? AND ends_at>=? ORDER BY starts_at DESC,id DESC').all(now, now),
     events: db.prepare("SELECT id,title,description,location,starts_at,ends_at,registration_url,image,video_embed,video_provider FROM events WHERE deleted_at IS NULL AND active=1 ORDER BY COALESCE(NULLIF(starts_at,''),created_at),id").all(),
-    rewards: db.prepare('SELECT id,title,description,purchase_amount,starts_at,ends_at,image FROM rewards WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id LIMIT 2').all(now)
+    rewards: db.prepare('SELECT id,title,description,purchase_amount,starts_at,ends_at,image FROM rewards WHERE deleted_at IS NULL AND active=1 AND ends_at>=? ORDER BY starts_at,id LIMIT 8').all(now)
   };
 }
 async function cleanImage(file) {
